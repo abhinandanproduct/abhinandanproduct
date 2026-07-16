@@ -1,5 +1,7 @@
 node_modules/
 dist/
 .env
-uploads/
+# Runtime uploads dir at the backend root — matches only `backend/uploads`,
+# NOT `backend/src/uploads/` which is source code (the uploads module).
+/uploads/
 *.log

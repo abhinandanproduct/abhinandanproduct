@@ -23,9 +23,13 @@ next-env.d.ts
 .env.production
 !.env.example
 
-# User uploads (live on Supabase Storage in prod, local in dev)
-backend/uploads/
-uploads/
+# User uploads — runtime folder where the app writes files, NOT the
+# source directory. The bare `uploads/` rule used to match everything
+# including `backend/src/uploads/` (the module folder), which silently
+# excluded that source code from the repo → deploy failed. Anchor the
+# rules to the specific runtime paths only.
+/backend/uploads/
+/uploads/
 
 # DB backups
 backups/
