@@ -1,0 +1,2176 @@
+// =============================================================
+//  Shree Abhinandan Product — 92.5 Silver Manufacturing ERP
+//  Prisma schema (PostgreSQL / Supabase)
+//
+//  Process chain: CAM → Casting → Die Number → Filing → Polish →
+//                 Kacha Fitting → Magnet → Sand Blast → Plating →
+//                 Meena → Fitting+Mala → Sticking → Packing
+//                 (sequence is per-design via ItemProcess; flexible)
+//
+//  Identity: design code at CAD entry (<vendor.shortName>-NNN),
+//            item number allocated post-Packing (ABN-NNNN).
+//
+//  Variants: bifurcate at Plating receipt — per-piece weights
+//            travel as ProductionVariant from Plating to sale.
+// =============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Supabase: DATABASE_URL = pooled (6543, pgbouncer); DIRECT_URL = direct (5432) for migrations.
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------- Auth ----------------
+enum UserRole {
+  ADMIN
+  MANAGER
+  STAFF
+}
+
+enum ActiveStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model User {
+  id           Int          @id @default(autoincrement())
+  username     String       @unique @db.VarChar(60)
+  email        String       @unique @db.VarChar(150)
+  passwordHash String       @map("password_hash") @db.VarChar(255)
+  fullName     String       @map("full_name") @db.VarChar(150)
+  role         UserRole     @default(STAFF)
+  status       ActiveStatus @default(ACTIVE)
+  lastLoginAt  DateTime?    @map("last_login_at")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  vendors           Vendor[]
+  materials         Material[]
+  items             Item[]
+  itemsAllocated    Item[]              @relation("ItemNumberAllocator")
+  files             FileAsset[]
+  statusChanges     StatusHistory[]
+  materialIssues    MaterialIssue[]     @relation("MaterialIssueCreator")
+  repairOrders      RepairOrder[]
+  auditLogs         AuditLog[]          @relation("AuditLogActor")
+  undoneLogs        AuditLog[]          @relation("AuditLogUndoer")
+  vendorMetalLedger VendorMetalLedger[] @relation("VendorMetalLedgerActor")
+  customerMetalLedger CustomerMetalLedger[] @relation("CustomerMetalLedgerActor")
+  missingPartReports MissingPart[]      @relation("MissingPartReporter")
+  invoicesCreated    Invoice[]          @relation("InvoiceCreator")
+  paymentsCreated    Payment[]          @relation("PaymentCreator")
+  billsCreated       Bill[]             @relation("BillCreator")
+  vendorPaymentsMade VendorPayment[]    @relation("VendorPaymentCreator")
+  recurringInvoices  RecurringInvoice[] @relation("RecurringInvoiceCreator")
+
+  @@map("users")
+}
+
+// ---------------- Audit log ----------------
+// Append-only record of every mutation across the app: who did what to
+// which entity, with full before/after JSON snapshots and an optional
+// undo strategy that the service-layer registry maps to an undo handler.
+//
+// Lifecycle:
+//   1. Mutation calls AuditService.log(...) → row created
+//   2. UI renders the row in the Activity timeline; expand shows the diff
+//   3. (Optional) Admin clicks Undo → AuditService.undo(row.id) reverses
+//      the action and STAMPS undoneAt + undoneByUserId on this row
+//   4. undoneAt non-null → row can't be undone again; UI hides the button
+//
+// `targetType` is a stable string (e.g. "Item", "CastingBatch") not a
+// table name so refactors don't break the log. `targetId` is the
+// primary key of that record. `snapshotBefore` is null for create
+// actions; `snapshotAfter` is null for delete actions.
+model AuditLog {
+  id             Int       @id @default(autoincrement())
+  userId         Int?      @map("user_id")
+  action         String    @db.VarChar(80) // e.g. "items.update", "casting.receipt.create"
+  targetType     String?   @map("target_type") @db.VarChar(60) // e.g. "Item", "CastingBatchItem"
+  targetId       Int?      @map("target_id")
+  description    String?   @db.Text
+  snapshotBefore Json?     @map("snapshot_before")
+  snapshotAfter  Json?     @map("snapshot_after")
+  // Name of an undo handler registered in AuditService. Null means the
+  // action is logged but not undoable from the UI. Examples:
+  //   "items.delete" — restore from snapshotBefore
+  //   "items.update" — revert fields to snapshotBefore
+  undoStrategy   String?   @map("undo_strategy") @db.VarChar(80)
+  // Stamped when the row's action is reversed via AuditService.undo().
+  // Once set, the UI hides the undo button on this row.
+  undoneAt       DateTime? @map("undone_at")
+  undoneByUserId Int?      @map("undone_by_user_id")
+  // When this entry was CREATED by an undo of another entry. Lets the
+  // UI show "undo of #1234" for traceability and prevents undo loops.
+  undoOfId       Int?      @map("undo_of_id")
+  ip             String?   @db.VarChar(45)
+  userAgent      String?   @map("user_agent") @db.VarChar(255)
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  user        User?      @relation("AuditLogActor", fields: [userId], references: [id], onDelete: SetNull)
+  undoneBy    User?      @relation("AuditLogUndoer", fields: [undoneByUserId], references: [id], onDelete: SetNull)
+  undoOf      AuditLog?  @relation("AuditLogUndoChain", fields: [undoOfId], references: [id], onDelete: SetNull)
+  undoCreated AuditLog[] @relation("AuditLogUndoChain")
+
+  @@index([action])
+  @@index([targetType, targetId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ---------------- Process master ----------------
+// Manufacturing / job-work stages. Data-driven so the list is extensible.
+model Process {
+  id         Int          @id @default(autoincrement())
+  code       String       @unique @db.VarChar(40) // e.g. CASTING
+  name       String       @db.VarChar(80)
+  sortOrder  Int          @default(0) @map("sort_order")
+  isCosted   Boolean      @default(true) @map("is_costed")
+  // True when this process consumes raw materials via the design's BOM
+  // (Filing, Kacha Fitting, Fitting + Mala, Sticking in the silver chain).
+  // Drives BOM auto-issue on forward, material-snapshot freezing, and
+  // BOM-cost inclusion in the design's cost price.
+  bomCapable Boolean      @default(false) @map("bom_capable")
+  // True for the receipt that bifurcates a group stage into per-piece
+  // ProductionVariant records. In the silver chain that's PLATING —
+  // pieces arrive back individually-weighed and travel with their own
+  // identity through every remaining stage to sale.
+  bifurcates Boolean      @default(false) @map("bifurcates")
+  // When true, any Vendor tagged for this process MUST have a shortName.
+  // Used for CAM/Designer — the design code TVM-XXX is built from
+  // <vendor.shortName>-NNN, so designer vendors without a shortName break
+  // the design-code generator. Operator can toggle from Process Master.
+  requiresShortName Boolean @default(false) @map("requires_short_name")
+  status     ActiveStatus @default(ACTIVE)
+  createdAt  DateTime     @default(now()) @map("created_at")
+
+  vendorLinks          VendorProcess[]
+  itemProcesses        ItemProcess[]
+  itemMaterials        ItemMaterial[]
+  batches              CastingBatch[]
+  stageItems           CastingBatchItem[] @relation("StageProcess")
+  plannedNextForStages CastingBatchItem[] @relation("PlannedNextProcess")
+  materialVariants     MaterialVariantProcess[]
+
+  @@map("processes")
+}
+
+// ---------------- Vendor Master ----------------
+// vendorCode = company-internal vendor id (V0001). NOT a design reference.
+model Vendor {
+  id            Int          @id @default(autoincrement())
+  vendorCode    String       @unique @map("vendor_code") @db.VarChar(20)
+  vendorName    String       @map("vendor_name") @db.VarChar(150)
+  shortName     String?      @map("short_name") @db.VarChar(60)
+  // In-house vendor — owned by the company (no rate billing). When true, the
+  // forward dialog hides the Rate field + skips the rate-required guard.
+  // External outsource vendors leave this false (default).
+  isInhouse     Boolean      @default(false) @map("is_inhouse")
+  contactPerson String?      @map("contact_person") @db.VarChar(120)
+  mobile        String?      @db.VarChar(20)
+  email         String?      @db.VarChar(150)
+  address       String?      @db.Text
+  gstNumber     String?      @map("gst_number") @db.VarChar(20)
+  panNumber     String?      @map("pan_number") @db.VarChar(15)
+  notes         String?      @db.Text
+  status        ActiveStatus @default(ACTIVE)
+  createdById   Int?         @map("created_by")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  createdBy            User?                   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  processes            VendorProcess[]
+  variantVendors       MaterialVariantVendor[]
+  itemProcessLinks     ItemProcessVendor[]
+  castingBatchRows     CastingBatchItem[]
+  advanceDrawBatchRows CastingBatchItem[]      @relation("AdvanceDrawVendor")
+  plannedNextForStages CastingBatchItem[]      @relation("PlannedNextVendor")
+  castingReceipts      CastingReceipt[]
+  materialIssues       MaterialIssue[]
+  stockReceipts        StockMovement[]
+  repairOrders         RepairOrder[]
+  metalBalances        VendorMetalBalance[]
+  silverLots           SilverLot[]             @relation("SilverLotVendor")
+  lotHoldings          VendorLotHolding[]      @relation("VendorLotHoldingVendor")
+  metalLedger          VendorMetalLedger[]
+  bills                Bill[]
+  vendorPayments       VendorPayment[]
+
+  @@index([status])
+  @@index([vendorName])
+  @@map("vendors")
+}
+
+// Vendor <-> Process (many-to-many): which processes a vendor supports.
+model VendorProcess {
+  id        Int @id @default(autoincrement())
+  vendorId  Int @map("vendor_id")
+  processId Int @map("process_id")
+
+  vendor  Vendor  @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  process Process @relation(fields: [processId], references: [id], onDelete: Cascade)
+
+  @@unique([vendorId, processId])
+  @@index([processId])
+  @@map("vendor_processes")
+}
+
+// ---------------- Material Variant Master ----------------
+model MaterialCategory {
+  id        Int          @id @default(autoincrement())
+  name      String       @unique @db.VarChar(80)
+  status    ActiveStatus @default(ACTIVE)
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  materials Material[]
+
+  @@map("material_categories")
+}
+
+model Material {
+  id           Int          @id @default(autoincrement())
+  materialCode String       @unique @map("material_code") @db.VarChar(20)
+  materialName String       @map("material_name") @db.VarChar(150)
+  categoryId   Int?         @map("category_id")
+  unit         String?      @db.VarChar(20)
+  notes        String?      @db.Text
+  status       ActiveStatus @default(ACTIVE)
+  createdById  Int?         @map("created_by")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  category  MaterialCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  createdBy User?             @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  variants  MaterialVariant[]
+
+  @@index([categoryId])
+  @@index([status])
+  @@map("materials")
+}
+
+model MaterialVariant {
+  id          Int     @id @default(autoincrement())
+  materialId  Int     @map("material_id")
+  variantCode String  @unique @map("variant_code") @db.VarChar(30)
+  variantName String  @map("variant_name") @db.VarChar(150)
+  size        String? @db.VarChar(60)
+  color       String? @db.VarChar(60)
+  finish      String? @db.VarChar(60)
+  shape       String? @db.VarChar(60)
+  unit        String? @db.VarChar(20)
+  imagePath   String? @map("image_path") @db.VarChar(255)
+  notes       String? @db.Text
+
+  // Dual tracking. Some variants are counted (silver balls — 100 pcs),
+  // some weighed (loose silver chips — 250 g), most stones are both
+  // (50 pcs @ 12.5 g total). At least one of the two flags must be true.
+  trackByQty    Boolean @default(true) @map("track_by_qty")
+  trackByWeight Boolean @default(true) @map("track_by_weight")
+
+  // Fine-metal content per gram (0-1). For Silver 999 = 0.999, for Silver
+  // 93.5 = 0.935. Powers cross-pool FIFO: when a 93.5-jewellery invoice
+  // consumes from a 999 lot, we deduct only the FINE metal equivalent
+  // (200 g of 93.5 = 200 × 0.935 = 187 g of 999) so the customer's raw
+  // silver contribution is fairly returned. NULL / 1.0 = not a purity-
+  // tracked variant (stones, findings, etc.).
+  fineness      Decimal? @default(1) @map("fineness") @db.Decimal(5, 4)
+
+  // Running balances — incremented/decremented by StockMovement records.
+  // stockQty is whole pcs (or fractional kg-style if the variant has only
+  // weight enabled and uses qty as a coarse measure); stockWeight is
+  // ALWAYS grams. Both stay 0 when the corresponding track-by flag is off.
+  stockQty    Decimal @default(0) @map("stock_qty") @db.Decimal(14, 3)
+  stockWeight Decimal @default(0) @map("stock_weight") @db.Decimal(14, 3)
+
+  status    ActiveStatus @default(ACTIVE)
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+
+  material      Material                @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  vendors       MaterialVariantVendor[]
+  itemUsage     ItemMaterial[]
+  movements     StockMovement[]
+  issueLines    MaterialIssueLine[]
+  metalBalances VendorMetalBalance[]
+  metalLedger   VendorMetalLedger[]
+  customerMetalBalances CustomerMetalBalance[]
+  customerMetalLedger   CustomerMetalLedger[]
+  silverLots            SilverLot[]
+  // Which processes this material variant is eligible for. Drives the
+  // Forward dialog's "Issue materials with this forward" picker so
+  // operators only see materials applicable to the target step (silver
+  // wire shows up for Filing/Polish; stones for Sticking/Fitting+Mala).
+  // Empty list = eligible for ALL processes (back-compat).
+  processes             MaterialVariantProcess[]
+  billLines             BillItem[]
+  alloyingIssuedLines   AlloyingBatchInput[]
+  alloyingReceivedLines AlloyingBatchOutput[]
+
+  @@index([materialId])
+  @@index([status])
+  @@map("material_variants")
+}
+
+// -------------------------------------------------------------------------
+// Alloying — the 999 → 93.5 silver conversion process. One AlloyingBatch
+// represents ONE conversion cycle: operator melts N kg of silver 999 with
+// K g of alloy (copper) and receives M kg of silver 93.5, plus runners
+// and a small loss. Inputs and outputs BOTH decrement/increment the
+// underlying MaterialVariant stock so the global silver ledger stays
+// coherent with everything else (batches, purchases, sales).
+// -------------------------------------------------------------------------
+enum AlloyingBatchStatus {
+  DRAFT      // saved but not yet melted (planning stage)
+  MELTED     // outputs recorded; balance closed
+  CANCELLED  // draft withdrawn, no stock impact
+}
+
+model AlloyingBatch {
+  id            Int                 @id @default(autoincrement())
+  batchNumber   String              @unique @map("batch_number") @db.VarChar(40)
+  batchDate     DateTime            @map("batch_date")
+  status        AlloyingBatchStatus @default(DRAFT)
+  notes         String?             @db.Text
+  createdById   Int?                @map("created_by")
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+
+  inputs  AlloyingBatchInput[]
+  outputs AlloyingBatchOutput[]
+
+  @@index([batchDate])
+  @@index([status])
+  @@map("alloying_batches")
+}
+
+// One row per input material — typically Silver 999 + Copper (or any other
+// alloy master the operator adds). Both weight (g) required.
+model AlloyingBatchInput {
+  id        Int     @id @default(autoincrement())
+  batchId   Int     @map("batch_id")
+  variantId Int     @map("variant_id")
+  weightG   Decimal @map("weight_g") @db.Decimal(14, 3)
+  notes     String? @db.Text
+
+  batch   AlloyingBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  variant MaterialVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([batchId])
+  @@map("alloying_batch_inputs")
+}
+
+// One row per output — typically Silver 93.5 (main output) + runners
+// (recovery pool) + loss (dust). All in grams. Runners feed straight back
+// into the melt pool for the next conversion.
+enum AlloyingOutputKind {
+  ALLOY   // the main output — e.g. Silver 93.5
+  RUNNERS // dust / cuttings recovered
+  LOSS    // metal genuinely lost (dust, splash, cannot recover)
+}
+
+model AlloyingBatchOutput {
+  id        Int                @id @default(autoincrement())
+  batchId   Int                @map("batch_id")
+  kind      AlloyingOutputKind
+  variantId Int?               @map("variant_id") // null for LOSS (no stock impact)
+  weightG   Decimal            @map("weight_g") @db.Decimal(14, 3)
+  notes     String?            @db.Text
+
+  batch   AlloyingBatch    @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  variant MaterialVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([batchId])
+  @@map("alloying_batch_outputs")
+}
+
+// Junction table: which manufacturing processes a material variant is
+// allowed/intended for. Independent of ItemMaterial (per-design BOM).
+model MaterialVariantProcess {
+  id        Int @id @default(autoincrement())
+  variantId Int @map("variant_id")
+  processId Int @map("process_id")
+
+  variant MaterialVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  process Process         @relation(fields: [processId], references: [id], onDelete: Cascade)
+
+  @@unique([variantId, processId])
+  @@index([processId])
+  @@map("material_variant_processes")
+}
+
+// Same variant sourced from multiple vendors.
+// vendorReference = the vendor's OWN code for this variant.
+model MaterialVariantVendor {
+  id              Int          @id @default(autoincrement())
+  variantId       Int          @map("variant_id")
+  vendorId        Int          @map("vendor_id")
+  vendorReference String?      @map("vendor_reference") @db.VarChar(80)
+  price           Decimal?     @db.Decimal(12, 2)
+  moq             Decimal?     @db.Decimal(12, 2)
+  isPreferred     Boolean      @default(false) @map("is_preferred")
+  notes           String?      @db.Text
+  status          ActiveStatus @default(ACTIVE)
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  variant MaterialVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  vendor  Vendor          @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@unique([variantId, vendorId])
+  @@index([vendorId])
+  @@map("material_variant_vendors")
+}
+
+// ---------------- Inventory ----------------
+enum StockMoveType {
+  IN // stock received / added
+  OUT // consumed (e.g. sticking batch)
+  ADJUST // manual correction (signed)
+}
+
+// Append-only stock ledger; MaterialVariant.stockQty + stockWeight are the
+// running balances. Every movement may carry BOTH qty and weight (each
+// optional and zero by default) so a single ledger row covers a variant
+// that's tracked by either dimension or both.
+model StockMovement {
+  id                 Int           @id @default(autoincrement())
+  variantId          Int           @map("variant_id")
+  type               StockMoveType
+  // Signed qty delta (pcs). Zero when this movement only affects weight.
+  quantity           Decimal       @default(0) @db.Decimal(14, 3)
+  balanceAfter       Decimal       @default(0) @map("balance_after") @db.Decimal(14, 3)
+  // Signed weight delta (grams). Zero when this movement only affects pcs.
+  weight             Decimal       @default(0) @db.Decimal(14, 3)
+  balanceWeightAfter Decimal       @default(0) @map("balance_weight_after") @db.Decimal(14, 3)
+  refType            String?       @map("ref_type") @db.VarChar(40) // 'manual' | 'sticking_batch' | 'opening' | 'purchase'
+  refId              Int?          @map("ref_id")
+  note               String?       @db.VarChar(255)
+  // Purchase-slip metadata — present on IN movements that represent a
+  // purchase from a raw-material supplier. Lets /raw-materials show
+  // received-slip folders grouped by vendor with the supplier's invoice no.
+  vendorId           Int?          @map("vendor_id")
+  invoiceNumber      String?       @map("invoice_number") @db.VarChar(60)
+  unitPrice          Decimal?      @map("unit_price") @db.Decimal(12, 2)
+  // Rate per gram (silver / metal purchases) — optional alternative to
+  // unitPrice for weight-priced raw materials.
+  unitRatePerGram    Decimal?      @map("unit_rate_per_gram") @db.Decimal(12, 2)
+  createdById        Int?          @map("created_by")
+  createdAt          DateTime      @default(now()) @map("created_at")
+
+  variant MaterialVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  vendor  Vendor?         @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+
+  @@index([variantId])
+  @@index([refType, refId])
+  @@index([vendorId])
+  @@map("stock_movements")
+}
+
+// ---------------- Item Master ----------------
+enum DesignType {
+  CAD
+  HANDMADE
+}
+
+enum SampleStatus {
+  DRAFT
+  IN_DEVELOPMENT
+  SAMPLE_READY
+  PRODUCTION_READY
+}
+
+// Identity model in silver ERP:
+//   sampleDesignCode → auto-generated at CAD entry from the CAD vendor's
+//     shortName (e.g. "TVM-001"). Internal reference used everywhere
+//     during production.
+//   itemNumber       → sales SKU, allocated ONCE after the first Packing
+//     receipt (e.g. "ABN-0042"). Operator clicks "Allocate Item Number"
+//     to bind it. Persists for the design's lifetime.
+model Item {
+  id                      Int       @id @default(autoincrement())
+  sampleDesignCode        String    @unique @map("internal_design_code") @db.VarChar(40)
+  // Sales SKU. Null until the first packing receipt; set once via the
+  // "Allocate Item Number" action and never auto-changes after.
+  itemNumber              String?   @unique @map("item_number") @db.VarChar(40)
+  itemNumberAllocatedAt   DateTime? @map("item_number_allocated_at")
+  itemNumberAllocatedById Int?      @map("item_number_allocated_by_id")
+  // Pre-bifurcation flag — set per item (default true for items created
+  // after the bifurcation feature ships). Phase-5 controls whether the
+  // Plating receipt splits this design into per-piece ProductionVariants.
+  // Legacy items can opt out so old in-flight batches finish the old way.
+  bifurcationEnabled      Boolean   @default(true) @map("bifurcation_enabled")
+
+  itemName          String?      @map("item_name") @db.VarChar(150)
+  category          String?      @db.VarChar(80)
+  subcategory       String?      @db.VarChar(80)
+  collection        String?      @db.VarChar(80)
+  notes             String?      @db.Text
+  // Design section
+  designType        DesignType?  @map("design_type")
+  designerName      String?      @map("designer_name") @db.VarChar(120)
+  designerShortName String?      @map("designer_short_name") @db.VarChar(20)
+  designCost        Decimal?     @map("design_cost") @db.Decimal(12, 2)
+  sellingPrice      Decimal?     @map("selling_price") @db.Decimal(12, 2)
+  // Auto-calculated by the system from process costs (read-only in the UI).
+  costPrice         Decimal?     @map("cost_price") @db.Decimal(12, 2)
+  cadFilePath       String?      @map("cad_file_path") @db.VarChar(255)
+  // Die number — physical mould number this design is cast from. Assigned
+  // at the Die Number stage (process #3) but skippable there; can also be
+  // set/edited later on the Item Master form. Blank means "not yet
+  // assigned" — reports flag those pieces.
+  dieNumber         String?      @map("die_number") @db.VarChar(40)
+  // Lifecycle
+  sampleStatus      SampleStatus @default(DRAFT) @map("sample_status")
+  status            ActiveStatus @default(ACTIVE)
+  createdById       Int?         @map("created_by")
+  createdAt         DateTime     @default(now()) @map("created_at")
+  updatedAt         DateTime     @updatedAt @map("updated_at")
+
+  createdBy           User?                 @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  itemNumberAllocator User?                 @relation("ItemNumberAllocator", fields: [itemNumberAllocatedById], references: [id], onDelete: SetNull)
+  images              ItemImage[]
+  processes           ItemProcess[]
+  materials           ItemMaterial[]
+  colorModels         ItemColorModel[]
+  designParts         ItemDesignPart[]
+  castingBatchRows    CastingBatchItem[]
+  finishedVariants    FinishedGoodVariant[]
+  productionVariants  ProductionVariant[]
+  missingParts        MissingPart[]
+  invoiceLines        InvoiceItem[]
+  billLines           BillItem[]
+
+  @@index([sampleStatus])
+  @@index([category])
+  @@map("items")
+}
+
+// One row per physical component of a design. A pendant-and-earring set
+// is two parts: pendant (qtyPerSet 1, weight 5 g) and earring
+// (qtyPerSet 2, weight 3 g each). Used to compute total expected weight
+// per batch, drive per-part weight tracking on receipt, and split BOM
+// consumption when parts go to different vendors at the same stage.
+model ItemDesignPart {
+  id          Int      @id @default(autoincrement())
+  itemId      Int      @map("item_id")
+  partName    String   @map("part_name") @db.VarChar(80)
+  qtyPerSet   Int      @default(1) @map("qty_per_set")
+  weightPerPc Decimal  @default(0) @map("weight_per_pc") @db.Decimal(10, 3)
+  // Photo of this part (relative upload path). Optional — the design's
+  // main photos still live in ItemImage. Per-part photos let operators
+  // confirm "this pendant has the curved hook" / "this earring has the
+  // pearl drop", separate from the assembled set photo.
+  photoPath   String?  @map("photo_path") @db.VarChar(255)
+  sortOrder   Int      @default(0) @map("sort_order")
+  notes       String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId])
+  @@map("item_design_parts")
+}
+
+// Colour model = a sellable colour variant of a design (e.g. 1501-a Green,
+// 1501-b Ruby). Each has its own photo + price, and records the colour used at
+// each colour-capable process (which may differ per step).
+model ItemColorModel {
+  id           Int      @id @default(autoincrement())
+  itemId       Int      @map("item_id")
+  letter       String   @db.VarChar(8) // a, b, c…
+  name         String   @db.VarChar(80) // Green, Ruby…
+  photoPath    String?  @map("photo_path") @db.VarChar(255)
+  costPrice    Decimal? @map("cost_price") @db.Decimal(12, 2)
+  sellingPrice Decimal? @map("selling_price") @db.Decimal(12, 2)
+  sortOrder    Int      @default(0) @map("sort_order")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  item          Item                    @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  processColors ItemColorModelProcess[]
+
+  @@index([itemId])
+  @@map("item_color_models")
+}
+
+model ItemColorModelProcess {
+  id           Int    @id @default(autoincrement())
+  colorModelId Int    @map("color_model_id")
+  processId    Int    @map("process_id")
+  color        String @db.VarChar(60)
+
+  colorModel ItemColorModel @relation(fields: [colorModelId], references: [id], onDelete: Cascade)
+
+  @@index([colorModelId])
+  @@map("item_color_model_processes")
+}
+
+model ItemImage {
+  id        Int      @id @default(autoincrement())
+  itemId    Int      @map("item_id")
+  filePath  String   @map("file_path") @db.VarChar(255)
+  isPrimary Boolean  @default(false) @map("is_primary")
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId])
+  @@map("item_images")
+}
+
+// One row per process section on an item. Process-level data (notes) here;
+// per-vendor pricing + the vendor's design reference live in ItemProcessVendor;
+// process-specific fields (weight, metal type, plating color...) in attributes.
+model ItemProcess {
+  id        Int      @id @default(autoincrement())
+  itemId    Int      @map("item_id")
+  processId Int      @map("process_id")
+  sequence  Int      @default(0)
+  notes     String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  item       Item                   @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  process    Process                @relation(fields: [processId], references: [id], onDelete: Cascade)
+  attributes ItemProcessAttribute[]
+  vendors    ItemProcessVendor[]
+  photos     ProcessPhoto[]
+  services   ItemProcessService[]
+
+  @@unique([itemId, processId])
+  @@index([processId])
+  @@map("item_processes")
+}
+
+// Master list of optional process services (e.g. Soldering, Fitting for Casting).
+// Extensible — new services can be seeded without code changes.
+model ProcessService {
+  id        Int          @id @default(autoincrement())
+  code      String       @unique @db.VarChar(40)
+  name      String       @db.VarChar(80)
+  // Process code this service applies to (e.g. CASTING). Null = any process.
+  appliesTo String?      @map("applies_to") @db.VarChar(40)
+  status    ActiveStatus @default(ACTIVE)
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  itemLinks ItemProcessService[]
+
+  @@map("process_services")
+}
+
+// Services selected on a specific item's process (with optional cost).
+model ItemProcessService {
+  id            Int      @id @default(autoincrement())
+  itemProcessId Int      @map("item_process_id")
+  serviceId     Int      @map("service_id")
+  cost          Decimal? @db.Decimal(12, 2)
+
+  itemProcess ItemProcess    @relation(fields: [itemProcessId], references: [id], onDelete: Cascade)
+  service     ProcessService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+
+  @@unique([itemProcessId, serviceId])
+  @@index([serviceId])
+  @@map("item_process_services")
+}
+
+// EAV attributes for process-specific fields (weight, metal_type,
+// plating_color, polish_type, color_type...). New processes need no DDL.
+model ItemProcessAttribute {
+  id            Int     @id @default(autoincrement())
+  itemProcessId Int     @map("item_process_id")
+  attrKey       String  @map("attr_key") @db.VarChar(60)
+  attrValue     String? @map("attr_value") @db.VarChar(255)
+
+  itemProcess ItemProcess @relation(fields: [itemProcessId], references: [id], onDelete: Cascade)
+
+  @@unique([itemProcessId, attrKey])
+  @@map("item_process_attributes")
+}
+
+// One entry per vendor option / color variant within a process.
+// vendorDesignReference = vendor's OWN code for this design (Casting -> CST-88).
+// `color` carries the plating / meena colour so the SAME vendor can appear
+// multiple times with different colours and prices. No unique constraint on
+// (itemProcess, vendor) — multiple rows per vendor are intentional.
+model ItemProcessVendor {
+  id                    Int      @id @default(autoincrement())
+  itemProcessId         Int      @map("item_process_id")
+  vendorId              Int      @map("vendor_id")
+  vendorDesignReference String?  @map("vendor_design_reference") @db.VarChar(80)
+  color                 String?  @db.VarChar(80) // colour for this row (Plating/Meena/Fitting/Mala/Sticking)
+  colorPhotoPath        String?  @map("color_photo_path") @db.VarChar(255) // photo of this colour
+  costPerPiece          Decimal? @map("cost_per_piece") @db.Decimal(12, 2)
+  isPreferred           Boolean  @default(false) @map("is_preferred")
+  // Sticking only: when true, this vendor brings their own raw materials — their
+  // per-piece rate already includes materials, so BOM cost is excluded from the
+  // item's cost price and no material-issue voucher is auto-created on forward.
+  bringsOwnMaterials    Boolean  @default(false) @map("brings_own_materials")
+  notes                 String?  @db.Text
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  itemProcess ItemProcess    @relation(fields: [itemProcessId], references: [id], onDelete: Cascade)
+  vendor      Vendor         @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  photos      ProcessPhoto[]
+
+  @@index([itemProcessId])
+  @@index([vendorId])
+  @@map("item_process_vendors")
+}
+
+// Development / progress images for a process (and optionally a specific entry).
+// processPhoto attached at process level when itemProcessVendorId is null.
+model ProcessPhoto {
+  id                  Int      @id @default(autoincrement())
+  itemProcessId       Int      @map("item_process_id")
+  itemProcessVendorId Int?     @map("item_process_vendor_id")
+  filePath            String   @map("file_path") @db.VarChar(255)
+  caption             String?  @db.VarChar(150)
+  createdAt           DateTime @default(now()) @map("created_at")
+
+  itemProcess       ItemProcess        @relation(fields: [itemProcessId], references: [id], onDelete: Cascade)
+  itemProcessVendor ItemProcessVendor? @relation(fields: [itemProcessVendorId], references: [id], onDelete: Cascade)
+
+  @@index([itemProcessId])
+  @@index([itemProcessVendorId])
+  @@map("process_photos")
+}
+
+// BOM scaffold (NOT calculated in Phase 1). Future production orders will
+// multiply quantities, apply wastage and source vendor-wise.
+model ItemMaterial {
+  id             Int      @id @default(autoincrement())
+  itemId         Int      @map("item_id")
+  variantId      Int      @map("variant_id")
+  // Which process this BOM line belongs to. In the silver chain BOM applies
+  // to Filing / Kacha Fitting / Fitting+Mala / Sticking. Sticking is per-
+  // colour; the others share a single BOM across colours. Null processId
+  // = legacy Sticking row (pre-extension).
+  processId      Int?     @map("process_id")
+  // Sticking BOM is per-colour: this material belongs to this sticking colour
+  // (null = common to all colours / colour-less design / non-sticking BOM
+  // since Filing / Kacha Fitting / Fitting+Mala share a single BOM across colours).
+  color          String?  @db.VarChar(80)
+  // Quantity in pcs and/or weight in grams — silver ERP captures BOTH on
+  // a BOM line because stone consumption is "10 pcs weighing 0.5 g total"
+  // and Filing material may be just a gram weight (no pcs). Either can be
+  // zero. Issue-time deduction uses whichever the variant tracks.
+  quantity       Decimal  @default(0) @db.Decimal(12, 3)
+  weight         Decimal  @default(0) @db.Decimal(12, 3)
+  unit           String?  @db.VarChar(20)
+  wastagePercent Decimal  @default(0) @map("wastage_percent") @db.Decimal(6, 2)
+  // Optional per-line rate override. Null = use the vendor's default rate
+  // (sticking = per-stone vendor rate; others = the variant's preferred
+  // supplier price). User can override per BOM line — saved here so the
+  // cost calc + slip PDF use the line's rate, not the master rate.
+  rate           Decimal? @db.Decimal(12, 2)
+  notes          String?  @db.Text
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  item    Item            @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  variant MaterialVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  process Process?        @relation(fields: [processId], references: [id], onDelete: SetNull)
+
+  @@index([itemId])
+  @@index([variantId])
+  @@index([processId])
+  @@map("item_materials")
+}
+
+// ---------------- Generic infrastructure ----------------
+model FileAsset {
+  id           Int      @id @default(autoincrement())
+  module       String   @db.VarChar(40) // vendors | materials | items | cad
+  recordId     Int?     @map("record_id")
+  fileType     String?  @map("file_type") @db.VarChar(40) // image | cad | document
+  originalName String?  @map("original_name") @db.VarChar(255)
+  fileName     String   @map("file_name") @db.VarChar(255)
+  filePath     String   @map("file_path") @db.VarChar(255)
+  mimeType     String?  @map("mime_type") @db.VarChar(100)
+  sizeBytes    Int?     @map("size_bytes")
+  uploadedById Int?     @map("uploaded_by")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  uploadedBy User? @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([module, recordId])
+  @@map("files")
+}
+
+model StatusHistory {
+  id          Int      @id @default(autoincrement())
+  module      String   @db.VarChar(40)
+  recordId    Int      @map("record_id")
+  oldStatus   String?  @map("old_status") @db.VarChar(60)
+  newStatus   String   @map("new_status") @db.VarChar(60)
+  note        String?  @db.VarChar(255)
+  changedById Int?     @map("changed_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  changedBy User? @relation(fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([module, recordId])
+  @@map("status_history")
+}
+
+// ================= Casting (Issue + Receipt) =================
+// A batch issues items to casting vendors. One batch → many items → possibly
+// many vendors. Receipts come back partially / vendor-wise / over multiple days.
+
+enum CastingBatchStatus {
+  OPEN // issued, nothing received
+  PARTIAL // some received
+  COMPLETED // fully received
+}
+
+model CastingBatch {
+  id           Int                @id @default(autoincrement())
+  batchNumber  String             @unique @map("batch_number") @db.VarChar(40)
+  // The manufacturing process this batch is for (Casting, Plating, Meena, …).
+  processId    Int?               @map("process_id")
+  batchDate    DateTime           @map("batch_date")
+  notes        String?            @db.Text
+  status       CastingBatchStatus @default(OPEN)
+  // Deliberate batch-level "short closed" mark — set by Close Batch Short, cleared by Reopen.
+  // This is independent of per-stage closes and drives the Batch Inventory folder.
+  closed       Boolean            @default(false)
+  closedAt     DateTime?          @map("closed_at")
+  closedReason String?            @map("closed_reason") @db.VarChar(255)
+  createdById  Int?               @map("created_by")
+  createdAt    DateTime           @default(now()) @map("created_at")
+  updatedAt    DateTime           @updatedAt @map("updated_at")
+
+  process                 Process?              @relation(fields: [processId], references: [id], onDelete: SetNull)
+  items                   CastingBatchItem[]
+  plannedAbsorptionStages CastingBatchItem[]    @relation("PlannedTargetBatch")
+  receipts                CastingReceipt[]
+  materialIssues          MaterialIssue[]
+  finishedVariants        FinishedGoodVariant[]
+
+  @@index([status])
+  @@index([processId])
+  @@map("casting_batches")
+}
+
+model CastingBatchItem {
+  id                    Int         @id @default(autoincrement())
+  batchId               Int         @map("batch_id")
+  itemId                Int?        @map("item_id") // link to Item Master (nullable for ad-hoc)
+  itemNumber            String      @map("item_number") @db.VarChar(60) // internal design code snapshot
+  itemName              String?     @map("item_name") @db.VarChar(150)
+  vendorId              Int         @map("vendor_id")
+  vendorDesignReference String?     @map("vendor_design_reference") @db.VarChar(80)
+  weight                Decimal     @default(0) @db.Decimal(12, 3) // per-piece weight
+  quantity              Int         @default(0)
+  totalWeight           Decimal     @default(0) @map("total_weight") @db.Decimal(12, 3)
+  costPerKg             Decimal?    @map("cost_per_kg") @db.Decimal(12, 2)
+  totalCost             Decimal?    @map("total_cost") @db.Decimal(12, 2)
+  services              String?     @db.VarChar(255) // snapshot of selected service names
+  remarks               String?     @db.Text
+  // Purpose for this batch line — typically the customer's name or
+  // "Stock" / "Sample". Captured at New Batch time, carried forward to
+  // every downstream stage of the same design line on forwardStage
+  // (overrideable per stage). Prints on the issue slip's "Order
+  // details" footer box so the karigar floor sees who the order is for.
+  purpose               String?     @db.VarChar(120)
+  // Traveler model: each row is a STAGE in one design line's journey through the
+  // processes. Casting is the first stage (parentItemId null). Forwarding received
+  // pieces to the next process creates a child stage (same lineKey).
+  processId             Int?        @map("stage_process_id")
+  parentItemId          Int?        @map("parent_item_id")
+  lineKey               String?     @map("line_key") @db.VarChar(40)
+  colorModel            String?     @map("color_model") @db.VarChar(120) // snapshot e.g. "a — Ruby"
+  color                 String?     @db.VarChar(60) // colour at this stage
+  // Immutable snapshot of the sticking BOM taken when this stage was issued, so the
+  // issue slip stays a stable historical document even if the item master changes later.
+  bomSnapshot           Json?       @map("bom_snapshot")
+  // Issue-slip grouping: stages issued to the same batch/process/vendor within 15
+  // minutes share one issue slip (issueSlipId = the first stage's id of that window).
+  issueSlipId           Int?        @map("issue_slip_id")
+  issueSlipAt           DateTime?   @map("issue_slip_at")
+  sortOrder             Int         @default(0) @map("sort_order")
+  // Short-close: this single order line is settled even though received < ordered.
+  // The shortfall is frozen here and surfaced on the Vendor Ledger as an outstanding balance.
+  closed                Boolean     @default(false)
+  closedReason          String?     @map("closed_reason") @db.VarChar(255)
+  closedAt              DateTime?   @map("closed_at")
+  shortQty              Int?        @map("short_qty")
+  shortWeight           Decimal?    @map("short_weight") @db.Decimal(12, 3)
+  // Pre-planned forward: when this AT-VENDOR stage is received later, the
+  // receipt handler auto-forwards the received pieces to this planned next
+  // process / vendor / colour, into the planned target batch (so existing
+  // stock created in a previous batch can be steered into a NEW production
+  // batch the moment it physically returns from the vendor).
+  plannedNextProcessId  Int?        @map("planned_next_process_id")
+  plannedNextVendorId   Int?        @map("planned_next_vendor_id")
+  plannedNextColor      String?     @map("planned_next_color") @db.VarChar(60)
+  plannedTargetBatchId  Int?        @map("planned_target_batch_id")
+  // Metal source for this stage: FRESH = drawn from main stock at issue.
+  // FROM_ADVANCE = drawn from the vendor's pre-given advance metal balance
+  // (advanceDrawVendor below; usually equals vendorId — separate FK lets
+  // future "third-party karigar with advance from someone else" cases work).
+  metalSource           MetalSource @default(FRESH) @map("metal_source")
+  advanceDrawVendorId   Int?        @map("advance_draw_vendor_id")
+  // Operator-overridable slip date — when the forward was actually backdated
+  // (or fixed after a date-entry error), this is the date that appears on the
+  // vendor karigar slip PDF. Null falls back to createdAt. One stage = one
+  // forward event in our model, so per-row granularity is correct.
+  issueDate             DateTime?   @map("issue_date") @db.Date
+  createdAt             DateTime    @default(now()) @map("created_at")
+
+  batch              CastingBatch                 @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  item               Item?                        @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  vendor             Vendor                       @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  stageProcess       Process?                     @relation("StageProcess", fields: [processId], references: [id], onDelete: SetNull)
+  plannedNextProcess Process?                     @relation("PlannedNextProcess", fields: [plannedNextProcessId], references: [id], onDelete: SetNull)
+  plannedNextVendor  Vendor?                      @relation("PlannedNextVendor", fields: [plannedNextVendorId], references: [id], onDelete: SetNull)
+  plannedTargetBatch CastingBatch?                @relation("PlannedTargetBatch", fields: [plannedTargetBatchId], references: [id], onDelete: SetNull)
+  advanceDrawVendor  Vendor?                      @relation("AdvanceDrawVendor", fields: [advanceDrawVendorId], references: [id], onDelete: SetNull)
+  receiptRows         CastingReceiptItem[]
+  materialIssues      MaterialIssue[]
+  repairOrders        RepairOrder[]
+  variantStageStops   ProductionVariantStageStop[]
+  missingPartsFlagged MissingPart[]      @relation("StageMissing")
+  missingPartsRecast  MissingPart[]      @relation("RecastBatchItem")
+
+  @@index([batchId])
+  @@index([vendorId])
+  @@index([lineKey])
+  @@map("casting_batch_items")
+}
+
+// Source of the metal used on a stage. FRESH = drawn from main stock at
+// issue time (most common). FROM_ADVANCE = drawn from a vendor's pre-given
+// advance metal balance, so main stock is not touched at issue (it was
+// already drained when the advance was allocated).
+enum MetalSource {
+  FRESH
+  FROM_ADVANCE
+}
+
+// A receipt records items returned by ONE vendor for a batch on a given date.
+// Multiple receipts per (batch, vendor) support partial / multi-day returns.
+model CastingReceipt {
+  id            Int      @id @default(autoincrement())
+  batchId       Int      @map("batch_id")
+  vendorId      Int      @map("vendor_id")
+  receiptNumber String   @unique @map("receipt_number") @db.VarChar(40)
+  receiptDate   DateTime @map("receipt_date")
+  notes         String?  @db.Text
+  // Silver runners returned by the vendor at this receipt — total across
+  // ALL designs in the receipt (per-vendor, per-visit). Split across designs
+  // was a bad model: the vendor weighs runners once on the scale, not per
+  // ABN. On save, posts to the "Silver Runners" material variant as IN
+  // stock. Zero means "no runners this receipt" (common on non-filing
+  // processes). Per-line runnersWeight on CastingReceiptItem stays for
+  // legacy rows but new receipts should use this.
+  runnersWeight Decimal  @default(0) @map("runners_weight") @db.Decimal(10, 3)
+  // Silver LOSS at this receipt — total across all designs the vendor
+  // worked on (per-vendor, per-visit). Same pattern as runnersWeight —
+  // one weigh on the scale, not per design. Posts to the LOSS-SILVER
+  // tracker variant on save.
+  lossWeight    Decimal  @default(0) @map("loss_weight") @db.Decimal(10, 3)
+  createdById   Int?     @map("created_by")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  batch  CastingBatch         @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  vendor Vendor               @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  items  CastingReceiptItem[]
+
+  @@index([batchId])
+  @@index([vendorId])
+  @@map("casting_receipts")
+}
+
+model CastingReceiptItem {
+  id                  Int                @id @default(autoincrement())
+  receiptId           Int                @map("receipt_id")
+  batchItemId         Int                @map("batch_item_id")
+  receivedQty         Int                @default(0) @map("received_qty")
+  receivedWeight      Decimal            @default(0) @map("received_weight") @db.Decimal(12, 3)
+  // QC outcome — receivedQty splits into accepted + repair + rejected.
+  // Legacy rows backfill: acceptedQty = receivedQty, others = 0.
+  // INVARIANT: acceptedQty + repairQty + rejectedQty == receivedQty.
+  acceptedQty         Int                @default(0) @map("accepted_qty")
+  repairQty           Int                @default(0) @map("repair_qty")
+  rejectedQty         Int                @default(0) @map("rejected_qty")
+  // Reject details — only meaningful when rejectedQty > 0.
+  // paymentMode is REQUIRED (no default) when any pcs are rejected:
+  // user picks NO_PAY / ADJUSTED / FULL_PAY per their judgement. When
+  // ADJUSTED, paymentAdjustment carries the deduction amount in Rs.
+  rejectReason        String?            @map("reject_reason") @db.Text
+  rejectPaymentMode   RejectPaymentMode? @map("reject_payment_mode")
+  rejectAdjustment    Decimal?           @map("reject_adjustment") @db.Decimal(12, 2)
+  // Rate ACTUALLY CHARGED on this receipt — can differ from the issue
+  // slip's stage.costPerKg if the vendor's rate changed between issue
+  // and receipt. Pre-filled on the receive form from stage.costPerKg
+  // so the common case (rate unchanged) is one click. When set AND
+  // different from the stage rate, the receipt PDF + vendor ledger
+  // use THIS value (not the stage's), AND the Item Master process-
+  // vendor rate auto-syncs forward so future batches default to the
+  // new market rate.
+  //
+  // NULL = use the stage's rate (back-compat for every existing
+  // row — no backfill needed).
+  costPerKg           Decimal?           @map("cost_per_kg") @db.Decimal(12, 2)
+  // If this receipt row is the RETURN of a repair (vendor brought back
+  // pcs from a prior RepairOrder), link to that order. Lets the receive
+  // flow know "this is repair round N+1, not a fresh return".
+  fromRepairOrderId   Int?               @map("from_repair_order_id")
+  // Post-Plating per-piece bifurcation — when this row represents the
+  // receipt of a single ProductionVariant (one of the 6 individual pieces
+  // birthed at Plating), the link points at it AND perPieceWeight carries
+  // that piece's weighed-in value. Null for group rows (pre-Plating
+  // stages or designs with bifurcationEnabled=false).
+  productionVariantId Int?               @map("production_variant_id")
+  perPieceWeight      Decimal?           @map("per_piece_weight") @db.Decimal(10, 3)
+  // Metal lost on this row (grams) — operator-supplied at receive time.
+  // SIGNED: positive = loss (most processes), negative = gain (sand blast
+  // can pick up material). On save the service accumulates the signed
+  // value into the "Metal Loss" material variant — net positive = net
+  // metal lost across the period.
+  lossWeight          Decimal            @default(0) @map("loss_weight") @db.Decimal(10, 3)
+  // Silver runners cut off the design at Filing / Polish — recovered metal
+  // that goes back to the casting pool. On save the service posts this to
+  // the "Silver Runners" material variant as IN stock. Always >= 0.
+  // Single field — includes the melted-ball weight from in-house dust melt.
+  runnersWeight       Decimal            @default(0) @map("runners_weight") @db.Decimal(10, 3)
+  // Pieces that physically went missing (dropped, plating-damaged beyond
+  // repair, etc.). Distinct from `rejectedQty` — rejected pcs CAME BACK
+  // but failed QC; lost pcs DIDN'T COME BACK. On save the service auto-
+  // creates a MissingPart record per lost piece so the design's downstream
+  // forwards are blocked until recast.
+  // INVARIANT: acceptedQty + repairQty + rejectedQty + lostQty == receivedQty
+  // is NOT enforced — lost pcs by definition were never received. The
+  // operator just records "I'm short N pcs from this stage's vendor".
+  lostQty             Int                @default(0) @map("lost_qty")
+  lostReason          String?            @map("lost_reason") @db.Text
+  // Pieces returned by the vendor AS-IS (untouched) — the karigar didn't
+  // finish those; they flow BACK to the batch item's pending pool for
+  // re-issue tomorrow (possibly to a different vendor). NOT counted as
+  // received. INVARIANT: `receivedQty` = pcs the vendor actually worked
+  // on (accepted + repair + rejected). `returnedAsIsQty` sits alongside
+  // and decrements the vendor's outstanding allocation.
+  returnedAsIsQty     Int                @default(0) @map("returned_as_is_qty")
+  // Weight the vendor CLAIMS they sent for this design. Recorded per-row
+  // at receipt time so the drift (claimed − actual receivedWeight) can
+  // be aggregated per vendor for the purchase-bill "Received vs Actual"
+  // reconciliation section. NEVER printed on the vendor's slip / bill —
+  // it's our internal cross-check only.
+  claimedSentWeight   Decimal?           @map("claimed_sent_weight") @db.Decimal(10, 3)
+  remarks             String?            @db.Text
+  createdAt           DateTime           @default(now()) @map("created_at")
+
+  receipt           CastingReceipt     @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  batchItem         CastingBatchItem   @relation(fields: [batchItemId], references: [id], onDelete: Cascade)
+  fromRepair        RepairOrder?       @relation("RepairReturn", fields: [fromRepairOrderId], references: [id], onDelete: SetNull)
+  productionVariant ProductionVariant? @relation(fields: [productionVariantId], references: [id], onDelete: SetNull)
+  // A receive can spawn ONE repair order (the qty marked for repair on this row).
+  spawnedRepair     RepairOrder?       @relation("SpawnedByReceipt")
+
+  @@index([receiptId])
+  @@index([batchItemId])
+  @@index([productionVariantId])
+  @@map("casting_receipt_items")
+}
+
+// User's payment intent when REJECTING pcs at receive time. Picked per
+// rejection (no system default — user always decides):
+//   NO_PAY   = full unit cost deducted from vendor billing (most common)
+//   ADJUSTED = explicit deduction amount in `rejectAdjustment` (Rs.)
+//   FULL_PAY = no deduction (rare — "this was our fault")
+enum RejectPaymentMode {
+  NO_PAY
+  ADJUSTED
+  FULL_PAY
+}
+
+// Lifecycle of a single repair attempt sent back to a vendor.
+//   OPEN           — sent out, waiting for vendor return
+//   RETURNED       — vendor brought pcs back; they were received through
+//                    the normal receive flow (which may flag MORE repair
+//                    on the same lot, starting cycle N+1)
+//   FINAL_REJECTED — user gave up on repairing; remaining pcs were
+//                    rejected via the normal reject path
+enum RepairStatus {
+  OPEN
+  RETURNED
+  FINAL_REJECTED
+}
+
+// One row per "we sent N pcs back to vendor V to fix" event.
+// Repairs are NO-CHARGE — the vendor's original rate covers the rework.
+// Re-repairs chain via parentRepairId so cycle count can climb past 1.
+model RepairOrder {
+  id               Int          @id @default(autoincrement())
+  // The receipt row that flagged this repair (origin).
+  receiptItemId    Int          @unique @map("receipt_item_id")
+  // The batch_item stage these pcs belong to (cached for fast joins).
+  stageId          Int          @map("stage_id")
+  // The vendor who's doing the repair (almost always the same vendor
+  // who made the original lot — repair is THEIR responsibility).
+  vendorId         Int          @map("vendor_id")
+  qty              Int // pcs sent
+  reason           String?      @db.Text
+  // Cycle = 1 for the first repair attempt on a lot, 2 for a re-repair
+  // (this repair was spawned from a return that still had issues), etc.
+  cycle            Int          @default(1)
+  // Self-link — if this is a re-repair, points to the prior RepairOrder
+  // whose return surfaced more bad pcs.
+  parentRepairId   Int?         @map("parent_repair_id")
+  status           RepairStatus @default(OPEN)
+  // Set when user gives up after N attempts and rejects whatever didn't fix.
+  finalRejectedQty Int          @default(0) @map("final_rejected_qty")
+  sentAt           DateTime     @default(now()) @map("sent_at")
+  returnedAt       DateTime?    @map("returned_at")
+  closedAt         DateTime?    @map("closed_at")
+  notes            String?      @db.Text
+  createdById      Int?         @map("created_by")
+
+  // Optional link — set when this repair targets a single bifurcated piece
+  // (post-Plating per-variant repair). Null for group repairs (pre-Plating).
+  productionVariantId Int? @map("production_variant_id")
+
+  receiptItem       CastingReceiptItem   @relation("SpawnedByReceipt", fields: [receiptItemId], references: [id], onDelete: Cascade)
+  stage             CastingBatchItem     @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  vendor            Vendor               @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  parentRepair      RepairOrder?         @relation("RepairChain", fields: [parentRepairId], references: [id], onDelete: SetNull)
+  childRepairs      RepairOrder[]        @relation("RepairChain")
+  productionVariant ProductionVariant?   @relation(fields: [productionVariantId], references: [id], onDelete: SetNull)
+  // Receipts that returned this repair (back-ref of CastingReceiptItem.fromRepairOrderId).
+  returns           CastingReceiptItem[] @relation("RepairReturn")
+  createdBy         User?                @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([stageId])
+  @@index([vendorId])
+  @@index([status])
+  @@index([productionVariantId])
+  @@map("repair_orders")
+}
+
+// ================= Missing parts → Recast =================
+//
+// Sets ship multi-part (pendant + earring + patti). When the operator
+// receives a batch and notices some sets are short a part — "8 sets full,
+// 2 sets missing one earring each" — they flag those parts as MissingPart
+// records. The design's detail page surfaces a "Recast missing parts"
+// banner; one click creates a new Casting batch with rows = the missing
+// parts × qty. Each MissingPart links back to the receive stage where it
+// was noted AND (after recast) to the new batch row making it good.
+model MissingPart {
+  id                Int       @id @default(autoincrement())
+  // The stage at which the operator noticed pieces were short.
+  stageId           Int       @map("stage_id")
+  // Denormalised — the design those parts belong to. Speeds up the
+  // item-detail "open missing parts" query (no stage join needed).
+  itemId            Int       @map("item_id")
+  partName          String    @map("part_name") @db.VarChar(80)
+  qtyMissing        Int       @map("qty_missing")
+  weightMissing     Decimal?  @map("weight_missing") @db.Decimal(10, 3)
+  // Set when an operator triggers the recast — points at the new Casting
+  // batch row making the missing pieces good. Null until recast starts.
+  recastBatchItemId Int?      @map("recast_batch_item_id")
+  recastAt          DateTime? @map("recast_at")
+  notes             String?   @db.Text
+  reportedById      Int?      @map("reported_by_id")
+  reportedAt        DateTime  @default(now()) @map("reported_at")
+
+  stage           CastingBatchItem  @relation("StageMissing", fields: [stageId], references: [id], onDelete: Cascade)
+  item            Item              @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  recastBatchItem CastingBatchItem? @relation("RecastBatchItem", fields: [recastBatchItemId], references: [id], onDelete: SetNull)
+  reportedBy      User?             @relation("MissingPartReporter", fields: [reportedById], references: [id], onDelete: SetNull)
+
+  @@index([itemId])
+  @@index([stageId])
+  @@index([recastBatchItemId])
+  @@map("missing_parts")
+}
+
+// ---------------- Raw Material Issue / Return ----------------
+// One voucher per "we gave these materials to a vendor". Each line tracks what was
+// issued, what came back, and the short (the vendor owes us). Sticking forwards
+// auto-create one of these so the BOM consumption is now real vendor movement.
+enum MaterialIssueStatus {
+  OPEN // issued, awaiting return
+  PARTIAL // some lines returned
+  COMPLETED // all lines fully returned
+  CLOSED // closed with short balances on the vendor ledger
+}
+
+model MaterialIssue {
+  id            Int                 @id @default(autoincrement())
+  voucherNumber String              @unique @map("voucher_number") @db.VarChar(40)
+  vendorId      Int                 @map("vendor_id")
+  batchId       Int?                @map("batch_id")
+  stageId       Int?                @map("stage_id") // sticking stage that auto-triggered this issue, if any
+  issueDate     DateTime            @default(now()) @map("issue_date")
+  notes         String?             @db.Text
+  status        MaterialIssueStatus @default(OPEN)
+  createdById   Int?                @map("created_by_id")
+  createdAt     DateTime            @default(now()) @map("created_at")
+  closedAt      DateTime?           @map("closed_at")
+
+  vendor    Vendor              @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  batch     CastingBatch?       @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  stage     CastingBatchItem?   @relation(fields: [stageId], references: [id], onDelete: SetNull)
+  createdBy User?               @relation("MaterialIssueCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  lines     MaterialIssueLine[]
+
+  @@index([vendorId])
+  @@index([batchId])
+  @@index([status])
+  @@map("material_issues")
+}
+
+model MaterialIssueLine {
+  id          Int  @id @default(autoincrement())
+  issueId     Int  @map("issue_id")
+  variantId   Int  @map("variant_id")
+  issuedQty   Int  @map("issued_qty") // whole number — pieces, never fractions
+  receivedQty Int  @default(0) @map("received_qty")
+  // Vendor consumed in production but didn't return — written off. Set at
+  // receive time when the user picks "Mark rest used" for materials the
+  // vendor actually used (vs kept for future jobs).
+  consumedQty Int  @default(0) @map("consumed_qty")
+  // Qty we still OWE this vendor — we wanted to issue more but stock was
+  // short at forward time. When raw-material stock arrives, the user is
+  // prompted to issue the deferred amount via /material-issues/lines/:id/issue-deferred.
+  deferredQty Int  @default(0) @map("deferred_qty")
+  shortQty    Int? @map("short_qty") // only set on close — owed by vendor
+
+  // Weight ledger mirror of the qty fields, in grams. Used when the line's
+  // variant is tracked by weight (silver / stones); 0 otherwise. Vendor
+  // accounting on close: issued = received + consumed + lostWeight + short.
+  // `lostWeight` is explicit operator-recorded loss (filings dust, chipped
+  // stones) — on return it posts to LOSS-SILVER, same tracker as the
+  // design loss on CastingReceiptItem.lossWeight.
+  issuedWeight   Decimal  @default(0) @map("issued_weight")   @db.Decimal(14, 3)
+  receivedWeight Decimal  @default(0) @map("received_weight") @db.Decimal(14, 3)
+  consumedWeight Decimal  @default(0) @map("consumed_weight") @db.Decimal(14, 3)
+  lostWeight     Decimal  @default(0) @map("lost_weight")     @db.Decimal(14, 3)
+  // Silver runners cut off filing-process materials (kadi / pan) at the
+  // vendor — recovered metal that goes back into the RUNNERS-SILVER pool.
+  // Mirrors CastingReceiptItem.runnersWeight on the design side.
+  runnersWeight  Decimal  @default(0) @map("runners_weight")  @db.Decimal(14, 3)
+  deferredWeight Decimal  @default(0) @map("deferred_weight") @db.Decimal(14, 3)
+  shortWeight    Decimal? @map("short_weight") @db.Decimal(14, 3)
+
+  notes String? @db.Text
+
+  issue   MaterialIssue   @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  variant MaterialVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([issueId])
+  @@index([variantId])
+  @@map("material_issue_lines")
+}
+
+// ---------------- Dispatch & Inventory ----------------
+// Once Packing completes for a batch, finished pcs are CATEGORIZED into
+// FinishedGoodVariants (one per batch × plating-colour × user-typed
+// collection). Boxes physically holding those pcs (in count × pcsPerBox
+// groups) start their life at the Dispatch Center, then move to STORAGE
+// warehouses. Inter-warehouse transfers must pass through Dispatch —
+// enforced in the service layer. Movements are immutable (no undo);
+// "fix a mistake" = create a reverse movement.
+
+enum WarehouseKind {
+  DISPATCH // central hub — every variant lands here from packing first
+  STORAGE // physical warehouses — N of these, admin-managed
+}
+
+model Warehouse {
+  id        Int           @id @default(autoincrement())
+  name      String        @unique @db.VarChar(80)
+  kind      WarehouseKind
+  isActive  Boolean       @default(true)
+  notes     String?       @db.Text
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  movementsFrom BoxMovement[] @relation("MovementFrom")
+  movementsTo   BoxMovement[] @relation("MovementTo")
+
+  @@map("warehouses")
+}
+
+// One row per (batch × plating colour × collection). Splitting one
+// plating into multiple collections (e.g. 60 pcs "Gold Premium" + 40
+// pcs "Gold Standard" from a 100 pc gold run) is supported — each
+// split becomes its own variant. countedByName / categorizedByName
+// are operator NAMES (text input) — NOT the logged-in user; capturing
+// who physically did the work is the audit trail per user spec.
+// lossPcs+lossReason capture the physical-vs-system gap when the
+// counted total is less than the system's plated qty.
+model FinishedGoodVariant {
+  id                Int      @id @default(autoincrement())
+  batchId           Int      @map("batch_id")
+  itemId            Int      @map("item_id")
+  // Plating colour walked back from the source PACKING-stage row via
+  // the lineKey chain. NULL when the item has no Plating stage.
+  platingColour     String?  @map("plating_colour") @db.VarChar(80)
+  // User-typed merchandising label (free text). Same string across
+  // batches naturally rolls up in the warehouse stock view (per Q-A i).
+  collection        String   @db.VarChar(120)
+  // = sum of (boxCount × pcsPerBox) across this variant's box groups.
+  // Stored for query speed; service layer keeps it in sync on writes.
+  totalPcs          Int      @map("total_pcs")
+  lossPcs           Int      @default(0) @map("loss_pcs")
+  // Reason + operator name attached to the loss event. Compulsory whenever
+  // lossPcs > 0 — surfaced as required fields in the categorize form and
+  // re-validated server-side. Both stay null when lossPcs is 0.
+  lossReason        String?  @map("loss_reason") @db.Text
+  lossByName        String?  @map("loss_by_name") @db.VarChar(120)
+  countedByName     String   @map("counted_by_name") @db.VarChar(120)
+  categorizedByName String   @map("categorized_by_name") @db.VarChar(120)
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  batch     CastingBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  item      Item         @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  boxGroups BoxGroup[]
+
+  @@index([batchId])
+  @@index([itemId, platingColour, collection])
+  @@map("finished_good_variants")
+}
+
+// One row per distinct box-size within a variant. "7 boxes × 6 pcs"
+// = one BoxGroup with pcsPerBox=6, initialBoxCount=7. Multiple rows
+// per variant allow heterogeneous packing (7×6 + 6×5 + 2×7).
+model BoxGroup {
+  id              Int      @id @default(autoincrement())
+  variantId       Int      @map("variant_id")
+  pcsPerBox       Int      @map("pcs_per_box")
+  initialBoxCount Int      @map("initial_box_count")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  variant   FinishedGoodVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  movements BoxMovement[]
+
+  @@index([variantId])
+  @@map("box_groups")
+}
+
+// Immutable audit log of box movements. fromLocationId = NULL only for
+// the initial placement at DC immediately after categorize (the
+// "born here" entry). All later movements have BOTH from and to.
+// Inter-warehouse transfers are recorded as TWO rows sharing a
+// transferGroupId: STORAGE→DISPATCH then DISPATCH→STORAGE.
+// Stock at any (boxGroup × location) = sum(movements TO that location)
+// − sum(movements FROM that location). No cache table — keeps writes
+// consistent and lets the audit trail be the source of truth.
+model BoxMovement {
+  id              Int      @id @default(autoincrement())
+  boxGroupId      Int      @map("box_group_id")
+  fromLocationId  Int?     @map("from_location_id")
+  toLocationId    Int      @map("to_location_id")
+  boxCount        Int      @map("box_count")
+  actorName       String   @map("actor_name") @db.VarChar(120)
+  notes           String?  @db.Text
+  // Pairs the two halves of a STORAGE→DISPATCH→STORAGE transfer
+  // (NULL on simple single-leg moves).
+  transferGroupId String?  @map("transfer_group_id") @db.VarChar(40)
+  movedAt         DateTime @default(now()) @map("moved_at")
+
+  boxGroup     BoxGroup   @relation(fields: [boxGroupId], references: [id], onDelete: Restrict)
+  fromLocation Warehouse? @relation("MovementFrom", fields: [fromLocationId], references: [id], onDelete: Restrict)
+  toLocation   Warehouse  @relation("MovementTo", fields: [toLocationId], references: [id], onDelete: Restrict)
+
+  @@index([boxGroupId])
+  @@index([toLocationId])
+  @@index([fromLocationId])
+  @@index([transferGroupId])
+  @@map("box_movements")
+}
+
+// Edit history for FinishedGoodVariant + BoxGroup. Captures one row per
+// CHANGED field so a future "who renamed this collection?" or "who fixed
+// the box count?" question has an answer. Operator name is text — same
+// pattern as actorName on BoxMovement: it's the person who actually
+// did the work, not the logged-in user.
+//
+// Schema-light: a single table covers both entity types via entityType +
+// entityId rather than splitting into per-entity tables. The audit log
+// is append-only (no foreign keys on entityId) so deleting a variant
+// doesn't cascade-delete its history.
+model DispatchAuditLog {
+  id            Int      @id @default(autoincrement())
+  entityType    String   @map("entity_type") @db.VarChar(40)
+  entityId      Int      @map("entity_id")
+  field         String   @db.VarChar(60)
+  oldValue      String?  @map("old_value") @db.Text
+  newValue      String?  @map("new_value") @db.Text
+  changedByName String   @map("changed_by_name") @db.VarChar(120)
+  changedAt     DateTime @default(now()) @map("changed_at")
+
+  @@index([entityType, entityId])
+  @@index([changedAt])
+  @@map("dispatch_audit_log")
+}
+
+// ================= Production Variants (post-Plating per-piece identity) =================
+//
+// At Plating receipt, a group stage with N pieces splits into N ProductionVariant
+// rows — one per physical piece, each weighed individually. The variant carries
+// its identity (TVM-001(1), TVM-001(2), …) through every subsequent stage to
+// sale. Even though pieces travel together as a group on the next karigar
+// drop-off, each receive captures the per-piece weight again so loss/gain is
+// trackable per variant per stage (essential for silver weight accounting).
+//
+// variantIndex is allocated sequentially per item (1, 2, 3 …) and persists for
+// the design's lifetime — a second batch of TVM-001 picks up at the next index.
+
+enum ProductionVariantState {
+  IN_PROGRESS // born at Plating, still travelling through downstream stages
+  PACKED // Packing receive completed; ready for sale / dispatch
+  SOLD // exited the system via sale
+  SCRAPPED // permanently rejected
+}
+
+model ProductionVariant {
+  id                 Int                    @id @default(autoincrement())
+  itemId             Int                    @map("item_id")
+  variantCode        String                 @unique @map("variant_code") @db.VarChar(50)
+  variantIndex       Int                    @map("variant_index")
+  birthReceiptItemId Int                    @map("birth_receipt_item_id")
+  birthWeight        Decimal                @map("birth_weight") @db.Decimal(10, 3)
+  currentStageId     Int?                   @map("current_stage_id")
+  state              ProductionVariantState @default(IN_PROGRESS)
+  finishedGoodId     Int?                   @map("finished_good_id")
+  notes              String?                @db.Text
+  // Post-Packing details — entered per variant once the parent design's
+  // item number is allocated (right after Packing receipt). Each variant
+  // may carry its own additional charge + weight breakdown even for the
+  // same design.
+  //   packingDetailsFilled = true once the operator has entered these OR
+  //   dismissed the modal via "Save Later" — the pending flag drives the
+  //   deferred-fill UI so operators can complete them from the item page.
+  packingAdditionalCharge Decimal? @map("packing_additional_charge") @db.Decimal(14, 2)
+  packingGrossWt          Decimal? @map("packing_gross_wt") @db.Decimal(10, 3)
+  packingLessWt           Decimal? @map("packing_less_wt") @db.Decimal(10, 3)
+  packingNetWt            Decimal? @map("packing_net_wt") @db.Decimal(10, 3)
+  packingDetailsFilled    Boolean  @default(false) @map("packing_details_filled")
+  packingDetailsSavedAt   DateTime? @map("packing_details_saved_at")
+  createdAt          DateTime               @default(now()) @map("created_at")
+  updatedAt          DateTime               @updatedAt @map("updated_at")
+
+  item        Item                         @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  receiptRows CastingReceiptItem[]
+  repairs     RepairOrder[]
+  stageStops  ProductionVariantStageStop[]
+
+  @@unique([itemId, variantIndex])
+  @@index([itemId])
+  @@index([currentStageId])
+  @@index([state])
+  @@map("production_variants")
+}
+
+// One row per (variant × stage) — the per-piece weight observed when this
+// variant was received at this stage. Lets reports answer "what did each
+// piece weigh at every step?" without re-deriving from receipt rows.
+model ProductionVariantStageStop {
+  id                  Int       @id @default(autoincrement())
+  productionVariantId Int       @map("production_variant_id")
+  stageId             Int       @map("stage_id")
+  weightIn            Decimal   @map("weight_in") @db.Decimal(10, 3)
+  weightOut           Decimal?  @map("weight_out") @db.Decimal(10, 3)
+  enteredAt           DateTime  @default(now()) @map("entered_at")
+  exitedAt            DateTime? @map("exited_at")
+
+  productionVariant ProductionVariant @relation(fields: [productionVariantId], references: [id], onDelete: Cascade)
+  stage             CastingBatchItem  @relation(fields: [stageId], references: [id], onDelete: Cascade)
+
+  @@unique([productionVariantId, stageId])
+  @@index([stageId])
+  @@map("production_variant_stage_stops")
+}
+
+// ================= Vendor Advance Metal =================
+//
+// Operators pre-allocate metal (silver / specific variant) to a vendor as an
+// "advance" — the vendor uses it across multiple batches over time. The
+// VendorMetalBalance row is the denormalised running balance per
+// (vendor × variant); VendorMetalLedger is the append-only event log.
+//
+//   ALLOCATE_ADVANCE  — operator gives vendor lump of metal; main stock −,
+//                       vendor advance +.
+//   DRAW_INTO_BATCH   — a batch issued with metalSource=FROM_ADVANCE pulls
+//                       weight from the vendor balance instead of main stock.
+//   RETURN_TO_ADVANCE — vendor returns leftover metal back to advance pool.
+//   ADJUST            — manual correction with a note.
+
+enum VendorMetalEventType {
+  ALLOCATE_ADVANCE
+  DRAW_INTO_BATCH
+  RETURN_TO_ADVANCE
+  ADJUST
+}
+
+// Customer side of the metal ledger. Mirrors the vendor advance flow:
+// operator hands metal to a customer (advance / silver against upcoming
+// order), draws it back into billed invoices, and reconciles adjustments.
+// Also tracks LABOUR given/received alongside METAL so the customer
+// ledger reads "total metal given · total labour given · total metal
+// received · total labour received" with rolling balances.
+enum CustomerMetalEventType {
+  ALLOCATE_ADVANCE    // customer hands us silver (their raw stock) — customer balance +
+  DRAW_INTO_INVOICE   // we bill from that advance — customer balance −
+  RETURN_TO_CUSTOMER  // we return metal to the customer — customer balance −
+  LABOUR_GIVEN        // labour charge invoiced to customer (rupees)
+  LABOUR_RECEIVED     // payment received against labour charge (rupees)
+  ADJUST              // manual +/− correction
+}
+
+model VendorMetalBalance {
+  id            Int      @id @default(autoincrement())
+  vendorId      Int      @map("vendor_id")
+  variantId     Int      @map("variant_id")
+  balanceWeight Decimal  @default(0) @map("balance_weight") @db.Decimal(14, 3)
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  vendor  Vendor          @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  variant MaterialVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@unique([vendorId, variantId])
+  @@index([vendorId])
+  @@map("vendor_metal_balances")
+}
+
+model VendorMetalLedger {
+  id           Int                  @id @default(autoincrement())
+  vendorId     Int                  @map("vendor_id")
+  variantId    Int                  @map("variant_id")
+  eventType    VendorMetalEventType @map("event_type")
+  weight       Decimal              @db.Decimal(14, 3) // signed
+  balanceAfter Decimal              @map("balance_after") @db.Decimal(14, 3)
+  refType      String?              @map("ref_type") @db.VarChar(40)
+  refId        Int?                 @map("ref_id")
+  // Source lot for this movement. When a vendor draw comes out of a
+  // specific customer's advance metal (or bullion lot), the ledger row
+  // records WHICH lot it came from so the customer's metal balance can
+  // be reconstructed end-to-end: given → issued to V → returned →
+  // finished → sold. NULL for legacy rows and for bookkeeping-only
+  // adjustments.
+  sourceLotId  Int?                 @map("source_lot_id")
+  note         String?              @db.Text
+  createdById  Int?                 @map("created_by_id")
+  createdAt    DateTime             @default(now()) @map("created_at")
+
+  vendor    Vendor          @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  variant   MaterialVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  sourceLot SilverLot?      @relation(fields: [sourceLotId], references: [id], onDelete: SetNull)
+  createdBy User?           @relation("VendorMetalLedgerActor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([vendorId, variantId])
+  @@index([eventType])
+  @@index([createdAt])
+  @@index([sourceLotId])
+  @@map("vendor_metal_ledger")
+}
+
+// Per-lot vendor holding — the fine-grained "how much of lot L001 does
+// vendor V currently hold" table. Complements VendorMetalBalance (which
+// aggregates ALL sources). Every ISSUE_TO_VENDOR bumps this; every
+// return/receipt drops it.
+model VendorLotHolding {
+  id            Int      @id @default(autoincrement())
+  vendorId      Int      @map("vendor_id")
+  lotId         Int      @map("lot_id")
+  weightG       Decimal  @default(0) @map("weight_g") @db.Decimal(14, 3)
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  vendor Vendor    @relation("VendorLotHoldingVendor", fields: [vendorId], references: [id], onDelete: Cascade)
+  lot    SilverLot @relation(fields: [lotId], references: [id], onDelete: Cascade)
+
+  @@unique([vendorId, lotId])
+  @@index([vendorId])
+  @@index([lotId])
+  @@map("vendor_lot_holdings")
+}
+
+// Customer-side denormalised metal balance per (customer × variant).
+// Positive weight = customer has raw metal advance sitting with us.
+// Negative weight = we owe them metal.
+model CustomerMetalBalance {
+  id            Int      @id @default(autoincrement())
+  customerId    Int      @map("customer_id")
+  variantId     Int      @map("variant_id")
+  balanceWeight Decimal  @default(0) @map("balance_weight") @db.Decimal(14, 3)
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  customer Customer        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  variant  MaterialVariant @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@unique([customerId, variantId])
+  @@index([customerId])
+  @@map("customer_metal_balances")
+}
+
+// Append-only event log for customer metal + labour movements. The
+// `weight` column carries GRAMS for the metal event types and RUPEES
+// for the LABOUR_GIVEN / LABOUR_RECEIVED types (labour events don't
+// touch a specific variant, so variantId is nullable). `balanceAfter`
+// is the running metal balance after the event (unused / null for
+// labour rows since labour has its own running total).
+model CustomerMetalLedger {
+  id             Int                    @id @default(autoincrement())
+  customerId     Int                    @map("customer_id")
+  variantId      Int?                   @map("variant_id")
+  eventType      CustomerMetalEventType @map("event_type")
+  weight         Decimal                @db.Decimal(14, 3) // signed grams (metal) or rupees (labour)
+  balanceAfter   Decimal?               @map("balance_after") @db.Decimal(14, 3)
+  refType        String?                @map("ref_type") @db.VarChar(40)
+  refId          Int?                   @map("ref_id")
+  note           String?                @db.Text
+  createdById    Int?                   @map("created_by_id")
+  createdAt      DateTime               @default(now()) @map("created_at")
+
+  customer  Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  variant   MaterialVariant? @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  createdBy User?            @relation("CustomerMetalLedgerActor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([customerId, variantId])
+  @@index([eventType])
+  @@index([createdAt])
+  @@map("customer_metal_ledger")
+}
+
+// ============================================================================
+// BILLING — Customer master, invoices (Tax / Estimate / Delivery Challan),
+// payments, customer ledger. Models the Indian silver-jewellery B2B flow:
+// invoice line = qty x weight x silver rate/g + qty x weight x making rate/g,
+// GST 3% (1.5% CGST + 1.5% SGST for intra-state, 3% IGST otherwise).
+// ============================================================================
+
+enum InvoiceType {
+  QUOTE
+  SALES_ORDER
+  TAX_INVOICE
+  DELIVERY_CHALLAN
+  CREDIT_NOTE
+  // Kept for back-compat with any existing rows; new code uses QUOTE.
+  ESTIMATE
+  // Generated from an Estimate — collapses every estimate line into a
+  // SINGLE consolidated silver row so the printed bill shows one
+  // grand-total line (matches the Tanvi-style "925 Sterling Jewellery"
+  // format). Renders identically to TAX_INVOICE on the PDF (no "temp"
+  // stamp). Software-side only, the TEMP marker lives on the record via
+  // its InvoiceType so lists can filter it out of real-invoice reports.
+  TEMP_INVOICE
+}
+
+enum InvoiceStatus {
+  DRAFT
+  // Draft that's been vetted and is ready to become a real estimate/
+  // invoice. The service layer enforces customerId must be non-null and
+  // there must be at least one line before a DRAFT can flip to READY.
+  READY
+  ISSUED
+  PAID
+  CANCELLED
+  // Sales-order-only — set when the SO has been turned into a tax invoice.
+  INVOICED
+}
+
+enum PaymentMode {
+  CASH
+  BANK
+  UPI
+  CHEQUE
+  OTHER
+}
+
+model Customer {
+  id              Int       @id @default(autoincrement())
+  customerCode    String    @unique @map("customer_code") @db.VarChar(20)
+  customerName    String    @map("customer_name") @db.VarChar(200)
+  gstin           String?   @db.VarChar(20)
+  addressLine1    String?   @map("address_line1") @db.VarChar(200)
+  addressLine2    String?   @map("address_line2") @db.VarChar(200)
+  city            String?   @db.VarChar(80)
+  state           String?   @db.VarChar(80)
+  stateCode       String?   @map("state_code") @db.VarChar(4)
+  pincode         String?   @db.VarChar(10)
+  phone           String?   @db.VarChar(40)
+  email           String?   @db.VarChar(120)
+  balance         Decimal   @default(0) @db.Decimal(14, 2)
+  status          String    @default("ACTIVE") @db.VarChar(20)
+  notes           String?   @db.Text
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  invoices         Invoice[]
+  payments         Payment[]
+  recurringProfiles RecurringInvoice[]
+  metalBalances    CustomerMetalBalance[]
+  metalLedger      CustomerMetalLedger[]
+  silverLots       SilverLot[] @relation("SilverLotCustomer")
+
+  @@index([customerName])
+  @@map("customers")
+}
+
+// Silver lot — the unit of metal inventory that FIFO-drains into
+// invoices. Every kg of silver we hold — whether purchased from a
+// bullion vendor OR received as customer advance — creates one lot with
+// a locked-in RATE. Estimates for the source customer (or general sale
+// when source is BULLION) consume oldest lot first; when a bill spans
+// a lot boundary, the billing service auto-splits into two invoices at
+// the boundary line and alerts the operator.
+enum SilverLotSource {
+  BULLION           // purchased outright from a bullion supplier
+  CUSTOMER_ADVANCE  // received from a customer as advance metal
+}
+
+enum SilverLotRateType {
+  FIX       // rate locked at receipt time — every draw uses THIS rate
+  UNFIX     // market-linked — draw uses spot rate at invoice time
+}
+
+model SilverLot {
+  id                Int               @id @default(autoincrement())
+  lotNumber         String            @unique @map("lot_number") @db.VarChar(40)
+  source            SilverLotSource
+  rateType          SilverLotRateType @map("rate_type")
+  // Silver 999 vs Silver 93.5 (mapped to MaterialVariant so the same
+  // stock table backs everything). Populated on save.
+  variantId         Int               @map("variant_id")
+  // Vendor (BULLION source) OR customer (CUSTOMER_ADVANCE source). Exactly
+  // one is set; the other is null. Service layer enforces the invariant.
+  vendorId          Int?              @map("vendor_id")
+  customerId        Int?              @map("customer_id")
+  receivedAt        DateTime          @map("received_at")
+  // Grams (schema uses grams throughout for consistency with per-g rates).
+  receivedWeightG   Decimal           @map("received_weight_g") @db.Decimal(14, 3)
+  remainingWeightG  Decimal           @map("remaining_weight_g") @db.Decimal(14, 3)
+  // Rate at RECEIPT for FIX lots; latest known market rate for UNFIX
+  // lots (bookkeeping / display only — draws use spot at invoice time).
+  ratePerG          Decimal           @map("rate_per_g") @db.Decimal(10, 2)
+  billNumber        String?           @map("bill_number") @db.VarChar(40) // supplier's invoice ref
+  notes             String?           @db.Text
+  createdById       Int?              @map("created_by")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  variant       MaterialVariant       @relation(fields: [variantId], references: [id], onDelete: Restrict)
+  vendor        Vendor?               @relation("SilverLotVendor", fields: [vendorId], references: [id], onDelete: SetNull)
+  customer      Customer?             @relation("SilverLotCustomer", fields: [customerId], references: [id], onDelete: SetNull)
+  draws         SilverLotDraw[]
+  vendorLedgers VendorMetalLedger[]
+  vendorHoldings VendorLotHolding[]
+
+  @@index([customerId, receivedAt])
+  @@index([vendorId, receivedAt])
+  @@index([source, receivedAt])
+  @@map("silver_lots")
+}
+
+// Append-only ledger of every consumption from a lot. Lets us prove
+// which lot fed which invoice at what rate — audit and dispute resolution.
+model SilverLotDraw {
+  id            Int      @id @default(autoincrement())
+  lotId         Int      @map("lot_id")
+  invoiceId     Int?     @map("invoice_id")     // set when consumed by a normal invoice
+  invoiceItemId Int?     @map("invoice_item_id") // per-line granularity for splits
+  weightG       Decimal  @map("weight_g") @db.Decimal(14, 3)
+  ratePerG      Decimal  @map("rate_per_g") @db.Decimal(10, 2) // rate ACTUALLY charged (may differ from lot rate for UNFIX)
+  drawnAt       DateTime @default(now()) @map("drawn_at")
+  note          String?  @db.Text
+
+  lot         SilverLot    @relation(fields: [lotId], references: [id], onDelete: Cascade)
+  invoice     Invoice?     @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  invoiceItem InvoiceItem? @relation(fields: [invoiceItemId], references: [id], onDelete: SetNull)
+
+  @@index([lotId])
+  @@index([invoiceId])
+  @@map("silver_lot_draws")
+}
+
+model Invoice {
+  id              Int            @id @default(autoincrement())
+  invoiceNumber   String         @unique @map("invoice_number") @db.VarChar(40)
+  type            InvoiceType
+  status          InvoiceStatus  @default(DRAFT)
+  invoiceDate     DateTime       @map("invoice_date")
+  dueDate         DateTime?      @map("due_date")
+  // Nullable so the global "unassigned" DRAFT estimate can hold lines
+  // before a customer is chosen. Service layer requires non-null once
+  // status transitions out of DRAFT (READY / ISSUED).
+  customerId      Int?           @map("customer_id")
+  billToName      String         @map("bill_to_name") @db.VarChar(200)
+  billToAddress   String?        @map("bill_to_address") @db.Text
+  billToGstin     String?        @map("bill_to_gstin") @db.VarChar(20)
+  placeOfSupply   String?        @map("place_of_supply") @db.VarChar(80)
+  silverRatePerG  Decimal        @default(0) @map("silver_rate_per_g") @db.Decimal(10, 2)
+  makingRatePerG  Decimal        @default(0) @map("making_rate_per_g") @db.Decimal(10, 2)
+  gstPercent      Decimal        @default(3) @map("gst_percent") @db.Decimal(5, 2)
+  isInterState    Boolean        @default(false) @map("is_inter_state")
+  // QUOTE may sit with ratesFixed=false (rates "to be confirmed"); TAX_INVOICE
+  // requires ratesFixed=true. Service-layer guard.
+  ratesFixed      Boolean        @default(true) @map("rates_fixed")
+  // Optional discount on labor / making amount, % off pre-GST. Operator sets
+  // per invoice when bulk-discounting making charges. Stays null (= 0) for
+  // invoices without a labor concession.
+  laborDiscountPercent Decimal? @map("labor_discount_percent") @db.Decimal(5, 2)
+  // Sum of all InvoiceCharge rows — denormalised here so the totals box
+  // doesn't need to join on every render. Refreshed by the service on write.
+  chargesTotal    Decimal        @default(0) @map("charges_total") @db.Decimal(14, 2)
+  subtotal        Decimal        @default(0) @db.Decimal(14, 2)
+  cgstAmount      Decimal        @default(0) @map("cgst_amount") @db.Decimal(14, 2)
+  sgstAmount      Decimal        @default(0) @map("sgst_amount") @db.Decimal(14, 2)
+  igstAmount      Decimal        @default(0) @map("igst_amount") @db.Decimal(14, 2)
+  roundOff        Decimal        @default(0) @map("round_off") @db.Decimal(8, 2)
+  totalAmount     Decimal        @default(0) @map("total_amount") @db.Decimal(14, 2)
+  paidAmount      Decimal        @default(0) @map("paid_amount") @db.Decimal(14, 2)
+  balanceAmount   Decimal        @default(0) @map("balance_amount") @db.Decimal(14, 2)
+  // Editable total weight for delivery challans — the operator can
+  // override the sum of per-line weights (e.g. include tare, dust,
+  // packaging weight, or a physical dispatch weigh-in). Nullable; when
+  // null the PDF prints the calculated sum. Ignored for other types.
+  totalWeightG    Decimal?       @map("total_weight_g") @db.Decimal(10, 3)
+  // Free-text purpose for delivery challans — e.g. "Plating", "Casting",
+  // "For Order X". Shown next to CHALLAN No. on the printed sheet.
+  purpose         String?        @db.VarChar(120)
+  notes           String?        @db.Text
+  convertedFromId Int?           @unique @map("converted_from_id")
+  // Link from a TEMP_INVOICE back to the Estimate (QUOTE) it was
+  // generated from. Not unique — one estimate can regenerate its temp
+  // more than once, and we keep the older ones around for history.
+  // SetNull on delete so removing an estimate doesn't cascade into
+  // deleting the temp bills that were already printed for the customer.
+  sourceEstimateId Int?          @map("source_estimate_id")
+  createdById     Int?           @map("created_by_id")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  customer        Customer?           @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  items           InvoiceItem[]
+  charges         InvoiceCharge[]
+  convertedFrom   Invoice?            @relation("InvoiceConversion", fields: [convertedFromId], references: [id], onDelete: SetNull)
+  convertedTo     Invoice?            @relation("InvoiceConversion")
+  sourceEstimate  Invoice?            @relation("EstimateToTemp", fields: [sourceEstimateId], references: [id], onDelete: SetNull)
+  tempInvoices    Invoice[]           @relation("EstimateToTemp")
+  allocations     PaymentAllocation[]
+  silverLotDraws  SilverLotDraw[]
+  createdBy       User?               @relation("InvoiceCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([customerId])
+  @@index([invoiceDate])
+  @@index([type, status])
+  @@index([sourceEstimateId])
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id              Int      @id @default(autoincrement())
+  invoiceId       Int      @map("invoice_id")
+  itemId          Int?     @map("item_id")
+  itemNumber      String?  @map("item_number") @db.VarChar(40)
+  description     String   @db.VarChar(300)
+  hsnCode         String?  @map("hsn_code") @db.VarChar(20)
+  quantity        Int
+  // 6-decimal precision so back-derivation (typed total / qty) survives
+  // a round-trip. 3 decimals would round 16.30/36 = 0.4527777 → 0.453,
+  // then 0.453 × 36 = 16.308 (0.008 drift).
+  weightG         Decimal  @map("weight_g") @db.Decimal(12, 6)
+  // Operator-typed TOTAL weight for this line. When set, the PDF prints
+  // this value directly instead of computing (weightG × quantity), which
+  // avoids precision drift for lines whose per-piece rounds off. E.g.
+  // 2000 g / 60 pcs = 33.333 g/pc rounded, times 60 = 1999.98 — but if
+  // the operator typed 2000 as the total, we want the invoice to say
+  // 2000. Null → fall back to weightG × quantity as before.
+  totalWeightG    Decimal? @map("total_weight_g_typed") @db.Decimal(12, 3)
+  silverRatePerG  Decimal  @default(0) @map("silver_rate_per_g") @db.Decimal(10, 2)
+  makingRatePerG  Decimal  @default(0) @map("making_rate_per_g") @db.Decimal(10, 2)
+  silverAmount    Decimal  @default(0) @map("silver_amount") @db.Decimal(14, 2)
+  makingAmount    Decimal  @default(0) @map("making_amount") @db.Decimal(14, 2)
+  lineAmount      Decimal  @default(0) @map("line_amount") @db.Decimal(14, 2)
+  notes           String?  @db.Text
+  // -------------------------------------------------------------------------
+  // Detailed weight + labor breakdown (Tanvi-style outward). Used on the
+  // detailed-PDF second page. All optional so existing simple invoices
+  // (just weightG × rate) keep working.
+  // -------------------------------------------------------------------------
+  lessWeightG       Decimal? @map("less_weight_g") @db.Decimal(10, 3) // stones / findings removed
+  netWeightG        Decimal? @map("net_weight_g") @db.Decimal(10, 3)  // gross − less
+  purity            Decimal? @db.Decimal(6, 3)                         // %, e.g. 92.500
+  fineWeightG       Decimal? @map("fine_weight_g") @db.Decimal(10, 3) // net × purity / 100
+  wastagePercent    Decimal? @map("wastage_percent") @db.Decimal(6, 3)
+  wastageFineG      Decimal? @map("wastage_fine_g") @db.Decimal(10, 3) // net × wastage / 100
+  boxWeightG        Decimal? @map("box_weight_g") @db.Decimal(10, 3)
+  bagWeightG        Decimal? @map("bag_weight_g") @db.Decimal(10, 3)
+  tagWeightG        Decimal? @map("tag_weight_g") @db.Decimal(10, 3)
+  padWeightG        Decimal? @map("pad_weight_g") @db.Decimal(10, 3)
+  totalGrossWeightG Decimal? @map("total_gross_weight_g") @db.Decimal(10, 3)
+  size              String?  @db.VarChar(40)
+  category          String?  @db.VarChar(80)
+  plating           String?  @db.VarChar(80)
+  // Labor billing.
+  laborOn               String?  @map("labor_on") @db.VarChar(10)              // 'WEIGHT' | 'PIECE'
+  laborRateWithTax      Decimal? @map("labor_rate_with_tax") @db.Decimal(10, 4)
+  laborRateWithoutTax   Decimal? @map("labor_rate_without_tax") @db.Decimal(10, 4)
+  laborAmount           Decimal? @map("labor_amount") @db.Decimal(14, 2)
+  extraAmount           Decimal? @map("extra_amount") @db.Decimal(14, 2)
+  // Free-text label for the extra amount (e.g. "urgent delivery",
+  // "polish rework"). Prints on the PDF row when set so the customer
+  // knows what the additional charge covers. Null = amount stands alone.
+  extraDescription      String?  @map("extra_description") @db.VarChar(120)
+  fineAmount            Decimal? @map("fine_amount") @db.Decimal(14, 2)
+  packetNo              Int?     @map("packet_no")
+  productionOrderRef    String?  @map("production_order_ref") @db.VarChar(80)
+  boxRef                String?  @map("box_ref") @db.VarChar(80)
+  barcode               String?  @db.VarChar(80)
+
+  invoice        Invoice          @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  item           Item?            @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  silverLotDraws SilverLotDraw[]
+
+  @@index([invoiceId])
+  @@index([itemId])
+  @@map("invoice_items")
+}
+
+model Payment {
+  id              Int        @id @default(autoincrement())
+  paymentNumber   String     @unique @map("payment_number") @db.VarChar(40)
+  paymentDate     DateTime   @map("payment_date")
+  customerId      Int        @map("customer_id")
+  amount          Decimal    @db.Decimal(14, 2)
+  mode            PaymentMode
+  reference       String?    @db.VarChar(120)
+  notes           String?    @db.Text
+  createdById     Int?       @map("created_by_id")
+  createdAt       DateTime   @default(now()) @map("created_at")
+
+  customer    Customer            @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  allocations PaymentAllocation[]
+  createdBy   User?               @relation("PaymentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([customerId])
+  @@index([paymentDate])
+  @@map("payments")
+}
+
+// Master list of charge types operator can pick from when adding header-
+// level charges to an invoice (freight / packaging / insurance / loading /
+// custom...). Editable — operator adds new types from the invoice form.
+model ChargeType {
+  id        Int          @id @default(autoincrement())
+  code      String       @unique @db.VarChar(40)
+  name      String       @db.VarChar(80)
+  status    ActiveStatus @default(ACTIVE)
+  createdAt DateTime     @default(now()) @map("created_at")
+
+  invoiceCharges InvoiceCharge[]
+
+  @@map("charge_types")
+}
+
+// Per-invoice line for additional charges. Each row picks a ChargeType +
+// amount. Sum hits the invoice subtotal before GST so taxes apply to the
+// charges as well (correct in India for freight-on-sale etc.).
+model InvoiceCharge {
+  id           Int      @id @default(autoincrement())
+  invoiceId    Int      @map("invoice_id")
+  chargeTypeId Int      @map("charge_type_id")
+  // Optional override label (e.g. "Loading - 3 men"). Falls back to ChargeType.name.
+  label        String?  @db.VarChar(120)
+  amount       Decimal  @db.Decimal(14, 2)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  invoice    Invoice    @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  chargeType ChargeType @relation(fields: [chargeTypeId], references: [id], onDelete: Restrict)
+
+  @@index([invoiceId])
+  @@map("invoice_charges")
+}
+
+model PaymentAllocation {
+  id        Int     @id @default(autoincrement())
+  paymentId Int     @map("payment_id")
+  invoiceId Int     @map("invoice_id")
+  amount    Decimal @db.Decimal(14, 2)
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  @@index([paymentId])
+  @@index([invoiceId])
+  @@map("payment_allocations")
+}
+
+// ============================================================================
+// PURCHASES — Bills (vendor invoices), Purchase Orders, Vendor Credits,
+// Expenses, Payments Made. Mirror of the Sales side but vendor-facing.
+// All under one Bill model with a `type` discriminator (same idea as Invoice).
+// ============================================================================
+
+enum BillType {
+  PURCHASE_ORDER
+  BILL
+  VENDOR_CREDIT
+  EXPENSE
+}
+
+enum BillStatus {
+  DRAFT
+  ISSUED
+  PAID
+  CANCELLED
+  BILLED // purchase-order-only: PO has been converted to a Bill
+}
+
+model Bill {
+  id              Int        @id @default(autoincrement())
+  billNumber      String     @unique @map("bill_number") @db.VarChar(40)
+  type            BillType
+  status          BillStatus @default(DRAFT)
+  billDate        DateTime   @map("bill_date")
+  dueDate         DateTime?  @map("due_date")
+  vendorId        Int        @map("vendor_id")
+  // Snapshot at issue time so later vendor edits don't mutate prior bills.
+  vendorName      String     @map("vendor_name") @db.VarChar(200)
+  vendorAddress   String?    @map("vendor_address") @db.Text
+  vendorGstin     String?    @map("vendor_gstin") @db.VarChar(20)
+  // Reference number — vendor's own invoice number (printed on their bill).
+  vendorRefNumber String?    @map("vendor_ref_number") @db.VarChar(60)
+  placeOfSupply   String?    @map("place_of_supply") @db.VarChar(80)
+  gstPercent      Decimal    @default(3) @map("gst_percent") @db.Decimal(5, 2)
+  isInterState    Boolean    @default(false) @map("is_inter_state")
+  subtotal        Decimal    @default(0) @db.Decimal(14, 2)
+  cgstAmount      Decimal    @default(0) @map("cgst_amount") @db.Decimal(14, 2)
+  sgstAmount      Decimal    @default(0) @map("sgst_amount") @db.Decimal(14, 2)
+  igstAmount      Decimal    @default(0) @map("igst_amount") @db.Decimal(14, 2)
+  roundOff        Decimal    @default(0) @map("round_off") @db.Decimal(8, 2)
+  totalAmount     Decimal    @default(0) @map("total_amount") @db.Decimal(14, 2)
+  paidAmount      Decimal    @default(0) @map("paid_amount") @db.Decimal(14, 2)
+  balanceAmount   Decimal    @default(0) @map("balance_amount") @db.Decimal(14, 2)
+  // Category — for EXPENSE bills (Rent / Electricity / Salary / Other).
+  category        String?    @db.VarChar(80)
+  notes           String?    @db.Text
+  // PO → Bill conversion link.
+  convertedFromId Int?       @unique @map("converted_from_id")
+  createdById     Int?       @map("created_by_id")
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  vendor        Vendor                  @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  items         BillItem[]
+  convertedFrom Bill?                   @relation("BillConversion", fields: [convertedFromId], references: [id], onDelete: SetNull)
+  convertedTo   Bill?                   @relation("BillConversion")
+  allocations   VendorPaymentAllocation[]
+  createdBy     User?                   @relation("BillCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([vendorId])
+  @@index([billDate])
+  @@index([type, status])
+  @@map("bills")
+}
+
+model BillItem {
+  id            Int      @id @default(autoincrement())
+  billId        Int      @map("bill_id")
+  // Optional links: itemId for finished goods, variantId for raw materials.
+  itemId        Int?     @map("item_id")
+  variantId     Int?     @map("variant_id")
+  description   String   @db.VarChar(300)
+  hsnCode       String?  @map("hsn_code") @db.VarChar(20)
+  quantity      Decimal  @default(1) @db.Decimal(14, 3) // allows fractional g
+  weightG       Decimal? @map("weight_g") @db.Decimal(14, 3)
+  rate          Decimal  @default(0) @db.Decimal(14, 2) // per unit / per gram
+  lineAmount    Decimal  @default(0) @map("line_amount") @db.Decimal(14, 2)
+  notes         String?  @db.Text
+
+  bill    Bill             @relation(fields: [billId], references: [id], onDelete: Cascade)
+  item    Item?            @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  variant MaterialVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([billId])
+  @@index([variantId])
+  @@map("bill_items")
+}
+
+model VendorPayment {
+  id              Int        @id @default(autoincrement())
+  paymentNumber   String     @unique @map("payment_number") @db.VarChar(40)
+  paymentDate     DateTime   @map("payment_date")
+  vendorId        Int        @map("vendor_id")
+  amount          Decimal    @db.Decimal(14, 2)
+  mode            PaymentMode
+  reference       String?    @db.VarChar(120)
+  notes           String?    @db.Text
+  createdById     Int?       @map("created_by_id")
+  createdAt       DateTime   @default(now()) @map("created_at")
+
+  vendor      Vendor                    @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  allocations VendorPaymentAllocation[]
+  createdBy   User?                     @relation("VendorPaymentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([vendorId])
+  @@index([paymentDate])
+  @@map("vendor_payments")
+}
+
+model VendorPaymentAllocation {
+  id              Int     @id @default(autoincrement())
+  vendorPaymentId Int     @map("vendor_payment_id")
+  billId          Int     @map("bill_id")
+  amount          Decimal @db.Decimal(14, 2)
+
+  payment VendorPayment @relation(fields: [vendorPaymentId], references: [id], onDelete: Cascade)
+  bill    Bill          @relation(fields: [billId], references: [id], onDelete: Restrict)
+
+  @@index([vendorPaymentId])
+  @@index([billId])
+  @@map("vendor_payment_allocations")
+}
+
+// ============================================================================
+// Recurring Invoices — template + cadence. A daily cron creates the actual
+// Invoice from the template when nextRunDate <= today, then bumps nextRunDate.
+// ============================================================================
+
+enum RecurringFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+model RecurringInvoice {
+  id              Int                @id @default(autoincrement())
+  profileName     String             @map("profile_name") @db.VarChar(120)
+  customerId      Int                @map("customer_id")
+  // Header rates baked into every generated invoice. Same shape as Invoice.
+  silverRatePerG  Decimal            @default(0) @map("silver_rate_per_g") @db.Decimal(10, 2)
+  makingRatePerG  Decimal            @default(0) @map("making_rate_per_g") @db.Decimal(10, 2)
+  gstPercent      Decimal            @default(3) @map("gst_percent") @db.Decimal(5, 2)
+  isInterState    Boolean            @default(false) @map("is_inter_state")
+  // JSON lines snapshot — used to spawn the InvoiceItem rows on each run.
+  linesJson       Json               @map("lines_json")
+  frequency       RecurringFrequency
+  nextRunDate     DateTime           @map("next_run_date")
+  enabled         Boolean            @default(true)
+  notes           String?            @db.Text
+  createdById     Int?               @map("created_by_id")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+
+  customer  Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy User?    @relation("RecurringInvoiceCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([enabled, nextRunDate])
+  @@map("recurring_invoices")
+}

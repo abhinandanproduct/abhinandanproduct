@@ -1,0 +1,14 @@
+section,key,value
+summary,vendors_imported,14
+summary,vendors_merged_duplicates,3
+summary,materials_imported,224
+summary,materials_with_opening_stock,166
+summary,items_design_with_fg,23
+summary,items_design_only,8
+summary,items_orphan_fg,51
+summary,bom_lines_resolved,154
+summary,bom_lines_dropped,2
+summary,item_photos_attached,60
+summary,material_photos_attached,136
+bom_dropped,ABN-1526,"{""qty"":""2"",""name"":""Ball no. 28 Small"",""size"":"""",""price"":"""",""weight"":""0.16"",""materialId"":""0408e2ab-3d6d-45a0-bce5-95f7175f19ce""}"
+bom_dropped,ABN-1516,"{""qty"":""2"",""name"":""3mm Round Green Chempo"",""size"":""3mm"",""price"":"""",""weight"":"""",""materialId"":""7a5028c3-a3a7-47bd-9803-687c71725534""}"

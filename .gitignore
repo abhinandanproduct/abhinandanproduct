@@ -1,0 +1,72 @@
+# =============================================================
+#  Shree Abhinandan Product — repo .gitignore
+# =============================================================
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build artifacts
+dist/
+build/
+.next/
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+next-env.d.ts
+
+# Env / secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+!.env.example
+
+# User uploads (live on Supabase Storage in prod, local in dev)
+backend/uploads/
+uploads/
+
+# DB backups
+backups/
+*.sql.gz
+*.dump
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Prisma
+# Migrations ARE checked in; generated client is not.
+backend/node_modules/.prisma/
+
+# Vercel
+.vercel/
+
+# Test outputs
+coverage/
+
+# Misc
+*.tmp
+*.bak
+
+# Video / screencast files — not source
+*.mp4
+*.mov
+*.webm
+
+# Legacy data export (SilverERP migration source) — 71 MB, not needed at runtime
+SilverERP_Export/
+
+# Claude Code / assistant session metadata — local per-machine, not shared
+.claude/

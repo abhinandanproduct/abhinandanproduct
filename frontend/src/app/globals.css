@@ -1,0 +1,237 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* =============================================================
+   Shree Abhinandan Product — design tokens
+   Dark surface + warm gold accent. Silvira-flavour.
+   ============================================================= */
+
+@layer base {
+  :root {
+    /* Surfaces ------------------------------------------------- */
+    /* HSL triples (no hsl() wrapper) so Tailwind's hsl(var(--x)) works.
+     *
+     * SOFT DARK — retuned for factory floor / office lighting. The old
+     * palette was near-pure black (#0D1117) with near-pure white text
+     * (#E6E8EB), producing punishing contrast under fluorescent light.
+     * We bump every surface's lightness ~6–10 pts, drop the text down
+     * a touch, and desaturate the gold slightly so nothing "glows".
+     */
+    --background: 216 15% 15%;       /* #21252B — page bg (was #0D1117) */
+    --foreground: 213 8% 84%;        /* #D2D4D8 — primary text (was #E6E8EB) */
+
+    --card: 216 14% 18%;             /* #282D34 — card / panel */
+    --card-foreground: 213 8% 84%;
+
+    --popover: 216 14% 20%;
+    --popover-foreground: 213 8% 84%;
+
+    /* Brand (gold) -------------------------------------------- */
+    --primary: 43 42% 58%;            /* #C4A85D — softer gold */
+    --primary-foreground: 216 15% 12%;/* near-black on gold */
+
+    --secondary: 216 12% 23%;         /* #363B41 — input / chip surface */
+    --secondary-foreground: 213 8% 84%;
+
+    --muted: 216 12% 23%;
+    --muted-foreground: 213 6% 65%;   /* #A0A3A8 — secondary text */
+
+    --accent: 216 12% 26%;            /* hover surface */
+    --accent-foreground: 213 8% 88%;
+
+    --destructive: 0 55% 58%;         /* #D75F5F — desaturated red */
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 216 10% 30%;            /* softer 1px lines */
+    --input: 216 12% 23%;
+    --ring: 43 42% 58%;               /* focus ring = gold */
+
+    --sidebar: 216 16% 12%;           /* #1B1F24 — subtly darker than page */
+    --sidebar-foreground: 213 8% 82%;
+
+    --radius: 0.75rem;
+
+    /* Semantic accents (used by Badge variants, status chips) — retuned
+       to sit calmly on the softer dark surface. */
+    --success: 150 32% 52%;           /* #61B58F */
+    --warning: 39 68% 60%;            /* #E1AC53 */
+    --info:    208 55% 66%;           /* #7DAAD8 */
+
+    /* Layered surfaces — pick directly when you need exact depth */
+    --dark-1: 216 15% 15%;
+    --dark-2: 216 14% 18%;
+    --dark-3: 216 12% 23%;
+
+    /* Gold variants */
+    --gold:       43 42% 58%;
+    --gold-light: 43 42% 66%;
+    --gold-soft:  43 42% 58% / 0.14;  /* for chip backgrounds */
+
+    /* Text scale */
+    --text:       213 8% 84%;
+    --text-muted: 213 6% 65%;
+    --text-faint: 218 6% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html, body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+  body {
+    @apply antialiased;
+    font-family: var(--font-inter), 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+    font-feature-settings: 'rlig' 1, 'calt' 1;
+  }
+  /* DM Mono on numeric / code surfaces. Apply via `font-mono` or `tabular-nums`. */
+  .tabular-nums, .font-mono, code, kbd, samp, pre {
+    font-family: var(--font-dm-mono), 'JetBrains Mono', 'Fira Code', 'Cascadia Mono', Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* =============================================================
+   Silvira utility classes — small flourishes used across pages
+   ============================================================= */
+@layer components {
+  /* Section label: tiny gold uppercase header on cards. */
+  .section-label {
+    @apply text-[11px] font-bold uppercase tracking-[0.08em];
+    color: hsl(var(--gold));
+  }
+
+  /* Subtle gold tint backdrop for KPI / chip surfaces. */
+  .gold-tint {
+    background: hsl(var(--gold) / 0.08);
+    border: 1px solid hsl(var(--gold) / 0.25);
+  }
+  .success-tint {
+    background: hsl(var(--success) / 0.06);
+    border: 1px solid hsl(var(--success) / 0.25);
+  }
+  .warning-tint {
+    background: hsl(var(--warning) / 0.08);
+    border: 1px solid hsl(var(--warning) / 0.28);
+  }
+  .info-tint {
+    background: hsl(var(--info) / 0.08);
+    border: 1px solid hsl(var(--info) / 0.25);
+  }
+}
+
+/* Thin gold-tinged scrollbars — retuned to sit calmly on the softer dark. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(216 10% 38%) transparent;
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(216 10% 36%);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(43 42% 58% / 0.45);
+}
+
+/* =============================================================
+   Responsive safety nets — global rules that fix common overflow
+   without touching every page. Each is scoped so it only activates
+   when the developer opted into a wrapper class.
+   ============================================================= */
+
+/* Table wrapper — never allows horizontal scroll. On lg+ the table
+   renders normally; below lg the rows collapse into a stacked card
+   layout so every field stays reachable on narrow screens.
+   Add `<div className="table-scroll">…</div>` around a raw `<table>`. */
+.table-scroll {
+  min-width: 0;
+  width: 100%;
+  /* Never overflow horizontally — the table inside either fits (on xl+)
+     or collapses into cards (below xl). Vertical scroll still allowed
+     for the surrounding container / dialog body. */
+  overflow-x: hidden;
+}
+.table-scroll > table {
+  width: 100%;
+  min-width: 0 !important;
+  /* Fixed layout distributes column widths equally instead of blowing out
+     to fit the widest cell content — the difference between a 3000px
+     "cell wants this much" table and one that fits its 1024px wrapper. */
+  table-layout: auto;
+}
+
+/* Stacked-card mode on <xl (< 1280px). Bumped up from <lg because a
+   12-column table with rich inputs (Bulk Forward, Batch Detail) still
+   overflows a 1024px dialog. Anything below xl now stacks into cards —
+   only truly wide desktops render the table view. */
+@media (max-width: 1279px) {
+  .table-scroll > table,
+  .table-scroll > table > thead,
+  .table-scroll > table > tbody,
+  .table-scroll > table > tbody > tr,
+  .table-scroll > table > tbody > tr > td {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+  }
+  /* Hide desktop <thead> — labels move inline via ::before on <td>. */
+  .table-scroll > table > thead {
+    display: none;
+  }
+  .table-scroll > table > tbody > tr {
+    margin-bottom: 0.5rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.5rem;
+    background: hsl(var(--card));
+    padding: 0.5rem;
+  }
+  .table-scroll > table > tbody > tr > td {
+    padding: 0.25rem 0;
+    text-align: left !important;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    align-items: center;
+    border: 0;
+  }
+  /* Cell label — from data-label attribute on <td> (opt-in per page). */
+  .table-scroll > table > tbody > tr > td[data-label]::before {
+    content: attr(data-label);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: hsl(var(--muted-foreground));
+    flex-shrink: 0;
+  }
+}
+
+/* Every top-level page container gets a min-w-0 safety so wide children
+   (tables, long labels) don't force horizontal scroll on the page itself.
+   Attached via `.page-shell` on layout wrappers. */
+.page-shell {
+  min-width: 0;
+}
+.page-shell > * {
+  min-width: 0;
+}
+
+/* Autofill: keep dark surface instead of browser-default yellow. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+textarea:-webkit-autofill,
+select:-webkit-autofill {
+  -webkit-text-fill-color: hsl(var(--foreground));
+  -webkit-box-shadow: 0 0 0px 1000px hsl(var(--input)) inset;
+  caret-color: hsl(var(--foreground));
+  transition: background-color 5000s ease-in-out 0s;
+}
