@@ -27,6 +27,7 @@ async function seedInitialAdmin(logger: Logger) {
     await prisma.user.create({
       data: {
         username: 'admin',
+        fullName: 'System Administrator',
         email: 'admin@abhinandan.local',
         passwordHash,
         role: UserRole.ADMIN,
