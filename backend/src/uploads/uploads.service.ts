@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { randomBytes } from 'crypto';
 import { promises as fs } from 'fs';
-import { extname, join } from 'path';
+import { extname, join, resolve } from 'path';
 import { PrismaService } from '../prisma/prisma.service';
 
 const IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
@@ -38,7 +38,8 @@ export class UploadsService {
       throw new BadRequestException('File is not a valid image.');
     }
 
-    const dir = join(process.cwd(), this.uploadDir, safeModule);
+    // `resolve` so an absolute UPLOAD_DIR (e.g. `/data/uploads`) is honored.
+    const dir = join(resolve(process.cwd(), this.uploadDir), safeModule);
     await fs.mkdir(dir, { recursive: true });
 
     const fileName = `${randomBytes(8).toString('hex')}_${Date.now()}${ext}`;

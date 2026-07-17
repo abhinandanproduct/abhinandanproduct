@@ -1,6 +1,6 @@
 import PDFDocument from 'pdfkit';
 import { Response } from 'express';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { existsSync } from 'fs';
 
 /**
@@ -90,7 +90,8 @@ export function streamItemDatasheetPdf(res: Response, data: ItemDatasheetData) {
   doc.strokeColor(COLOR_LIGHT).lineWidth(0.5).rect(photoX, y, photoW, photoH).stroke();
   if (data.imagePath) {
     const uploadDir = process.env.UPLOAD_DIR ?? 'uploads';
-    const absPath = join(process.cwd(), uploadDir, data.imagePath);
+    // `resolve` so an absolute UPLOAD_DIR (e.g. `/data/uploads`) is honored.
+    const absPath = join(resolve(process.cwd(), uploadDir), data.imagePath);
     if (existsSync(absPath)) {
       try {
         // `fit` scales to fit inside the box preserving aspect ratio, with

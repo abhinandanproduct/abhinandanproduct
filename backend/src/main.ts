@@ -136,9 +136,11 @@ async function bootstrap() {
     credentials: true,
   });
 
-  // Serve uploaded files statically at /uploads
+  // Serve uploaded files statically at /uploads.
+  // `resolve` (not `join`) so an absolute UPLOAD_DIR like `/data/uploads`
+  // is honored — path.join would concatenate to `/app/data/uploads`.
   const uploadDir = process.env.UPLOAD_DIR ?? 'uploads';
-  app.useStaticAssets(join(process.cwd(), uploadDir), { prefix: '/uploads/' });
+  app.useStaticAssets(resolve(process.cwd(), uploadDir), { prefix: '/uploads/' });
 
   const port = Number(process.env.PORT ?? 4000);
   const logger = new Logger('Bootstrap');
