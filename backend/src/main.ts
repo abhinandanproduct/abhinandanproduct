@@ -23,16 +23,20 @@ async function bootstrap() {
 
   // Allow the configured origins, plus any localhost / 127.0.0.1 port during
   // development (covers http://127.0.0.1:3000, Next.js falling back to :3001, etc.).
+  // `*` as a value is treated as a true wildcard — echo the request's origin
+  // back so it works with `credentials: true` (browsers reject a literal `*`
+  // when credentials are involved).
   const configured = (process.env.CORS_ORIGIN ?? 'http://localhost:3000')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
+  const wildcard = configured.includes('*');
   const localhostPattern = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
   app.enableCors({
     origin: (origin, callback) => {
       // Non-browser clients (curl, server-to-server) send no Origin → allow.
       if (!origin) return callback(null, true);
-      if (configured.includes(origin) || localhostPattern.test(origin)) {
+      if (wildcard || configured.includes(origin) || localhostPattern.test(origin)) {
         return callback(null, true);
       }
       return callback(null, false);
