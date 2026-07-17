@@ -1,7 +1,8 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { join } from 'path';
+import { join, resolve } from 'path';
+import { promises as fs } from 'fs';
 import { PrismaClient, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 import { AppModule } from './app.module';
@@ -38,6 +39,62 @@ async function seedInitialAdmin(logger: Logger) {
     logger.error('Initial admin seed failed', e as any);
   } finally {
     await prisma.$disconnect();
+  }
+}
+
+/**
+ * First-boot uploads seed — if the runtime uploads directory is empty
+ * (fresh volume, or first deploy) AND a `uploads_seed/` sibling exists
+ * in the repo, copy every file over. Idempotent: as soon as the runtime
+ * dir has any content, this becomes a no-op, so it won't clobber
+ * anything users upload later.
+ *
+ * Necessary because Railway containers are ephemeral by default —
+ * uploaded files vanish on redeploy. We attach a persistent volume,
+ * then use this seed to get the legacy files onto that volume once.
+ * After a few successful deploys the `uploads_seed/` folder can be
+ * deleted from the repo to reclaim git space.
+ */
+async function seedUploadsIfEmpty(logger: Logger) {
+  const uploadDir = process.env.UPLOAD_DIR ?? 'uploads';
+  const runtime = resolve(process.cwd(), uploadDir);
+  // Seed lives next to the compiled backend at `<repo>/backend/uploads_seed`
+  // regardless of where the process runs from — search a couple of likely
+  // parents.
+  const candidates = [
+    resolve(process.cwd(), 'uploads_seed'),
+    resolve(process.cwd(), 'backend', 'uploads_seed'),
+    resolve(process.cwd(), '..', 'uploads_seed'),
+  ];
+  let seed = '';
+  for (const c of candidates) {
+    try {
+      const s = await fs.stat(c);
+      if (s.isDirectory()) { seed = c; break; }
+    } catch {}
+  }
+  if (!seed) return;
+
+  await fs.mkdir(runtime, { recursive: true });
+  const existing = await fs.readdir(runtime);
+  if (existing.length > 0) return;
+
+  let count = 0;
+  async function copyDir(from: string, to: string) {
+    await fs.mkdir(to, { recursive: true });
+    const entries = await fs.readdir(from, { withFileTypes: true });
+    for (const e of entries) {
+      const src = join(from, e.name);
+      const dst = join(to, e.name);
+      if (e.isDirectory()) await copyDir(src, dst);
+      else { await fs.copyFile(src, dst); count++; }
+    }
+  }
+  try {
+    await copyDir(seed, runtime);
+    logger.warn(`Seeded ${count} uploaded file(s) from ${seed} → ${runtime}`);
+  } catch (e) {
+    logger.error('Uploads seed failed', e as any);
   }
 }
 
@@ -86,6 +143,7 @@ async function bootstrap() {
   const port = Number(process.env.PORT ?? 4000);
   const logger = new Logger('Bootstrap');
   await seedInitialAdmin(logger);
+  await seedUploadsIfEmpty(logger);
   await app.listen(port);
   logger.log(`API running on http://localhost:${port}/api`);
 }
