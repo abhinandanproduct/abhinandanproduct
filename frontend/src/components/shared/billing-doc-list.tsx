@@ -137,8 +137,8 @@ export function BillingDocList({
               <Spinner /> Loading...
             </div>
           ) : (
-            <div className="table-scroll">
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto">
+            <table className="w-full text-sm" style={isEstimate ? { minWidth: 1200 } : undefined}>
               <thead className="bg-secondary/30 text-left text-xs text-muted-foreground">
                 <tr>
                   <SortableTh label="Number"   sortKey="invoiceNumber"  currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
@@ -154,7 +154,7 @@ export function BillingDocList({
                   )}
                   <SortableTh label="Total"    sortKey="totalAmount"    currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" />
                   <SortableTh label="Balance"  sortKey="balanceAmount"  currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" />
-                  <th className="px-4 py-2 text-right">Actions</th>
+                  <th className="px-4 py-2 text-right whitespace-nowrap">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -172,7 +172,7 @@ export function BillingDocList({
                       )}
                     </td>
                     <td className="px-4 py-2 text-xs">{new Date(inv.invoiceDate).toLocaleDateString('en-IN')}</td>
-                    <td className="px-4 py-2">{inv.billToName}</td>
+                    <td className="px-4 py-2 max-w-[200px] truncate" title={inv.billToName}>{inv.billToName}</td>
                     <td className="px-4 py-2">
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${STATUS_BADGE[inv.status] ?? STATUS_BADGE.DRAFT}`}>
                         {inv.status}
