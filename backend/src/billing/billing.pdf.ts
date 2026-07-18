@@ -380,27 +380,26 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
               // sum: 18+118+40+28+56+54+54+82+97 = 547
             ]
           : [
-              // Landscape interstate (14 cols · 794pt). Every money column
-              // sized to fit "Rs. 99,99,999.99" (≈82pt @ 9pt Helvetica-
-              // Bold) so per-line silver / making / S+M+A / Amount values
-              // up to a full crore print without ellipsis. Item column
-              // narrows to release the required width; description wraps
-              // to multiple lines as needed.
+              // Landscape interstate (14 cols · 794pt). Money columns
+              // sized for up to Rs. 20 lakh; Item column bumped to 80pt
+              // so the design number always fits on one line above its
+              // description; TOTAL row drops " g" so weight sums up to
+              // 5 digits fit without truncation.
               { label: '#',                  w: 18,  align: 'center' },
-              { label: 'Item & Description', w: 76,  align: 'left'   },
-              { label: 'HSN/SAC',            w: 42,  align: 'center' },
+              { label: 'Item & Description', w: 80,  align: 'left'   },
+              { label: 'HSN/SAC',            w: 38,  align: 'center' },
               { label: 'Qty',                w: 24,  align: 'right'  },
               { label: 'Wt/pc',              w: 44,  align: 'right'  },
-              { label: 'Gross Wt',           w: 46,  align: 'right'  },
+              { label: 'Gross Wt',           w: 48,  align: 'right'  },
               { label: 'Less Wt',            w: 42,  align: 'right'  },
-              { label: 'Net Wt',             w: 46,  align: 'right'  },
-              { label: 'Silver',             w: 82,  align: 'right'  },
-              { label: 'Making',             w: 82,  align: 'right'  },
-              { label: 'Addl Chrg',          w: 60,  align: 'right'  },
-              { label: 'S + M + A',          w: 82,  align: 'right'  },
-              { label: `IGST ${gstPct.toFixed(1)}%`, w: 70,  align: 'right'  },
-              { label: 'Amount',             w: 80,  align: 'right'  },
-              // sum: 18+76+42+24+44+46+42+46+82+82+60+82+70+80 = 794
+              { label: 'Net Wt',             w: 48,  align: 'right'  },
+              { label: 'Silver',             w: 78,  align: 'right'  },
+              { label: 'Making',             w: 78,  align: 'right'  },
+              { label: 'Addl Chrg',          w: 58,  align: 'right'  },
+              { label: 'S + M + A',          w: 78,  align: 'right'  },
+              { label: `IGST ${gstPct.toFixed(1)}%`, w: 66,  align: 'right'  },
+              { label: 'Amount',             w: 94,  align: 'right'  },
+              // sum: 18+80+38+24+44+48+42+48+78+78+58+78+66+94 = 794
             ]
         : compactMoneyCols
           ? [
@@ -426,30 +425,29 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
               // sum: 18+118+40+28+56+54+54+82+97 = 547
             ]
           : [
-              // Landscape intra-state (15 cols · 794pt). Every money
-              // column sized to fit "Rs. 99,99,999.99" (≈82pt @ 9pt
-              // Helvetica-Bold) so silver / making / S+M+A / Amount
-              // values up to a full crore print without ellipsis. The
-              // "Rs. 1,17,20…" truncation reported by operator on
-              // 8-digit totals is fixed by this wider silver column.
-              // Item column narrows to release the required width;
-              // description wraps to multiple lines when needed.
+              // Landscape intra-state (15 cols · 794pt). Money columns
+              // sized to fit up to "Rs. 20,00,000.00" (≈75pt @ 9pt
+              // Helvetica-Bold). Item column bumped to 64pt so the
+              // design number ("ABN-1509a") always fits on one line
+              // above its description. Weight columns kept moderate;
+              // the TOTAL row drops its " g" suffix so 5-digit totals
+              // like "20,000.000" print without truncation either.
               { label: '#',                  w: 18, align: 'center' },
-              { label: 'Item & Description', w: 48, align: 'left'   },
-              { label: 'HSN/SAC',            w: 36, align: 'center' },
+              { label: 'Item & Description', w: 64, align: 'left'   },
+              { label: 'HSN/SAC',            w: 32, align: 'center' },
               { label: 'Qty',                w: 22, align: 'right'  },
-              { label: 'Wt/pc',              w: 40, align: 'right'  },
-              { label: 'Gross Wt',           w: 44, align: 'right'  },
+              { label: 'Wt/pc',              w: 42, align: 'right'  },
+              { label: 'Gross Wt',           w: 48, align: 'right'  },
               { label: 'Less Wt',            w: 40, align: 'right'  },
-              { label: 'Net Wt',             w: 44, align: 'right'  },
-              { label: 'Silver',             w: 82, align: 'right'  },
-              { label: 'Making',             w: 82, align: 'right'  },
-              { label: 'Addl Chrg',          w: 60, align: 'right'  },
-              { label: 'S + M + A',          w: 82, align: 'right'  },
-              { label: `CGST ${halfPct.toFixed(2)}%`, w: 60, align: 'right' },
-              { label: `SGST ${halfPct.toFixed(2)}%`, w: 60, align: 'right' },
-              { label: 'Amount',             w: 76, align: 'right'  },
-              // sum: 18+48+36+22+40+44+40+44+82+82+60+82+60+60+76 = 794
+              { label: 'Net Wt',             w: 48, align: 'right'  },
+              { label: 'Silver',             w: 78, align: 'right'  },
+              { label: 'Making',             w: 78, align: 'right'  },
+              { label: 'Addl Chrg',          w: 56, align: 'right'  },
+              { label: 'S + M + A',          w: 78, align: 'right'  },
+              { label: `CGST ${halfPct.toFixed(2)}%`, w: 54, align: 'right' },
+              { label: `SGST ${halfPct.toFixed(2)}%`, w: 54, align: 'right' },
+              { label: 'Amount',             w: 82, align: 'right'  },
+              // sum: 18+64+32+22+42+48+40+48+78+78+56+78+54+54+82 = 794
             ]
       : [
           // No-tax layout (13 cols · 794pt). Extra headroom on money
@@ -789,13 +787,16 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
       // Silver /g, Making /g, Addl /pc are RATE columns — a sum across
       // lines isn't meaningful, so those totals cells stay blank. Only
       // Net Wt and Amount get filled in.
-      totalsCells[4] = { v: `${totals.netWt.toFixed(3)} g`, align: 'right' };
+      totalsCells[4] = { v: totals.netWt.toFixed(3), align: 'right' };
       totalsCells[8] = { v: inr(totals.sPlusM), align: 'right' };
     } else {
-      // Landscape: full breakdown row.
-      totalsCells[5]  = { v: `${totals.grossWt.toFixed(3)} g`, align: 'right' };
-      totalsCells[6]  = { v: totals.lessWt > 0 ? `${totals.lessWt.toFixed(3)} g` : '—', align: 'right' };
-      totalsCells[7]  = { v: `${totals.netWt.toFixed(3)} g`, align: 'right' };
+      // Landscape: full breakdown row. " g" suffix omitted so 5-digit
+      // total weights ("20,000.000") fit inside the same column width
+      // that holds a body value ("500.000") — column header already
+      // labels the unit.
+      totalsCells[5]  = { v: totals.grossWt.toFixed(3), align: 'right' };
+      totalsCells[6]  = { v: totals.lessWt > 0 ? totals.lessWt.toFixed(3) : '—', align: 'right' };
+      totalsCells[7]  = { v: totals.netWt.toFixed(3), align: 'right' };
       totalsCells[8]  = { v: inr(totals.silver), align: 'right' };
       totalsCells[9]  = { v: inr(totals.making), align: 'right' };
       totalsCells[10] = { v: totals.extra > 0 ? inr(totals.extra) : '—', align: 'right' };
