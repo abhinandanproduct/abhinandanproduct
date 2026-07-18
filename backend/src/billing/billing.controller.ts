@@ -35,8 +35,12 @@ export class BillingController {
   }
 
   @Get('customers/:id/ledger')
-  customerLedger(@Param('id', ParseIntPipe) id: number) {
-    return this.svc.customerLedger(id);
+  customerLedger(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+  ) {
+    return this.svc.customerLedger(id, { fromDate, toDate });
   }
 
   // ---- Invoice ----

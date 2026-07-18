@@ -9,15 +9,23 @@ import { toast } from 'sonner';
 import { Api, getApiError } from '@/lib/api';
 import { PageHeader } from '@/components/shared/page-header';
 import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Field } from '@/components/shared/field';
 import { Spinner } from '@/components/ui/spinner';
 
 export default function CustomerLedgerPage() {
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
+  // Date range — matches Zoho's Statement of Accounts. Blank = full history.
+  const [fromDate, setFromDate] = React.useState('');
+  const [toDate, setToDate]     = React.useState('');
   const q = useQuery<any>({
-    queryKey: ['customer-ledger', id],
-    queryFn: () => Api.billing.customerLedger(id),
+    queryKey: ['customer-ledger', id, fromDate, toDate],
+    queryFn: () => Api.billing.customerLedger(id, {
+      fromDate: fromDate || undefined,
+      toDate:   toDate   || undefined,
+    }),
     enabled: !!id,
   });
 
@@ -29,7 +37,7 @@ export default function CustomerLedgerPage() {
     );
   }
   if (!q.data) return null;
-  const { customer, rows, closingBalance, totalInvoiced, totalPaid } = q.data;
+  const { customer, rows, closingBalance, totalInvoiced, totalPaid, openingBalance } = q.data;
 
   return (
     <div className="space-y-4">
@@ -39,27 +47,53 @@ export default function CustomerLedgerPage() {
         back={true}
       />
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+      {/* Date range filter — matches Zoho's Statement date picker. */}
+      <Card>
+        <CardContent className="flex flex-col gap-3 p-3 sm:flex-row sm:items-end">
+          <Field label="From">
+            <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+          </Field>
+          <Field label="To">
+            <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
+          </Field>
+          {(fromDate || toDate) && (
+            <Button variant="outline" onClick={() => { setFromDate(''); setToDate(''); }}>
+              Clear range
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Account Summary — Opening / Invoiced / Received / Balance Due. */}
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
         <Card>
           <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground">Total Invoiced</div>
-            <div className="mt-1 text-2xl font-bold tabular-nums">
+            <div className="text-xs text-muted-foreground">Opening Balance</div>
+            <div className="mt-1 text-xl font-bold tabular-nums">
+              ₹ {Number(openingBalance ?? 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-4">
+            <div className="text-xs text-muted-foreground">Invoiced Amount</div>
+            <div className="mt-1 text-xl font-bold tabular-nums">
               ₹ {Number(totalInvoiced).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
             </div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground">Total Received</div>
-            <div className="mt-1 text-2xl font-bold tabular-nums text-success">
+            <div className="text-xs text-muted-foreground">Amount Received</div>
+            <div className="mt-1 text-xl font-bold tabular-nums text-success">
               ₹ {Number(totalPaid).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
             </div>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
-            <div className="text-xs text-muted-foreground">Closing Balance</div>
-            <div className={`mt-1 text-2xl font-bold tabular-nums ${closingBalance > 0 ? 'text-warning' : 'text-success'}`}>
+            <div className="text-xs text-muted-foreground">Balance Due</div>
+            <div className={`mt-1 text-xl font-bold tabular-nums ${closingBalance > 0 ? 'text-warning' : 'text-success'}`}>
               ₹ {Number(closingBalance).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
             </div>
           </CardContent>
@@ -72,36 +106,58 @@ export default function CustomerLedgerPage() {
           <table className="w-full text-sm">
             <thead className="bg-secondary/30 text-left text-xs text-muted-foreground">
               <tr>
-                <th className="px-4 py-2">Date</th>
-                <th className="px-4 py-2">Ref</th>
-                <th className="px-4 py-2">Description</th>
-                <th className="px-4 py-2 text-right">Debit</th>
-                <th className="px-4 py-2 text-right">Credit</th>
-                <th className="px-4 py-2 text-right">Balance</th>
+                <th className="px-4 py-3">Date</th>
+                <th className="px-4 py-3">Transactions</th>
+                <th className="px-4 py-3">Details</th>
+                <th className="px-4 py-3 text-right">Amount</th>
+                <th className="px-4 py-3 text-right">Payments</th>
+                <th className="px-4 py-3 text-right">Balance</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r: any, i: number) => (
-                <tr key={i} className="border-t border-border">
-                  <td className="px-4 py-2 text-xs">{new Date(r.date).toLocaleDateString('en-IN')}</td>
-                  <td className="px-4 py-2 text-xs font-semibold">
-                    {r.kind === 'INVOICE' ? (
-                      <Link href={`/billing/invoices/${r.id}`} className="text-info hover:underline">{r.ref}</Link>
-                    ) : r.ref}
+                <tr key={i} className="border-t border-border align-top">
+                  <td className="px-4 py-3 text-xs">
+                    {r.kind === 'OPENING' ? '' : new Date(r.date).toLocaleDateString('en-IN')}
                   </td>
-                  <td className="px-4 py-2 text-xs">{r.description}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">
-                    {r.debit ? `₹ ${r.debit.toFixed(2)}` : ''}
+                  <td className="px-4 py-3 text-xs font-semibold">
+                    {r.kind === 'OPENING' ? '***Opening Balance***'
+                     : r.description}
                   </td>
-                  <td className="px-4 py-2 text-right tabular-nums text-success">
-                    {r.credit ? `₹ ${r.credit.toFixed(2)}` : ''}
+                  <td className="px-4 py-3 text-xs">
+                    {r.kind === 'OPENING' ? '' :
+                      <>
+                        <div className="font-semibold">
+                          {r.kind === 'INVOICE' ? (
+                            <Link href={`/billing/invoices/${r.id}`} className="text-info hover:underline">{r.ref}</Link>
+                          ) : r.ref}
+                        </div>
+                        {(r.details ?? []).map((d: string, j: number) => (
+                          <div key={j} className="text-[11px] text-muted-foreground">{d}</div>
+                        ))}
+                      </>
+                    }
                   </td>
-                  <td className="px-4 py-2 text-right font-medium tabular-nums">₹ {r.balance.toFixed(2)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums">
+                    {r.debit ? Number(r.debit).toLocaleString('en-IN', { minimumFractionDigits: 2 }) : ''}
+                  </td>
+                  <td className="px-4 py-3 text-right tabular-nums text-success">
+                    {r.credit ? Number(r.credit).toLocaleString('en-IN', { minimumFractionDigits: 2 }) : ''}
+                  </td>
+                  <td className="px-4 py-3 text-right font-medium tabular-nums">
+                    {Number(r.balance).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </td>
                 </tr>
               ))}
               {rows.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-12 text-center text-muted-foreground">No transactions yet.</td></tr>
+                <tr><td colSpan={6} className="px-4 py-12 text-center text-muted-foreground">No transactions in this range.</td></tr>
               )}
+              <tr className="border-t-2 border-border bg-secondary/40 font-bold">
+                <td colSpan={5} className="px-4 py-3 text-right">Balance Due</td>
+                <td className="px-4 py-3 text-right tabular-nums text-warning">
+                  ₹ {Number(closingBalance).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                </td>
+              </tr>
             </tbody>
           </table>
           </div>

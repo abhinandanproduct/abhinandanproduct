@@ -568,8 +568,8 @@ export const Api = {
     createCustomer: (body: any) => unwrap<any>(api.post('/customers', body)),
     updateCustomer: (id: number, body: any) =>
       unwrap<any>(api.put(`/customers/${id}`, body)),
-    customerLedger: (id: number) =>
-      unwrap<any>(api.get(`/customers/${id}/ledger`)),
+    customerLedger: (id: number, params?: { fromDate?: string; toDate?: string }) =>
+      unwrap<any>(api.get(`/customers/${id}/ledger`, { params })),
 
     invoices: (params?: Record<string, any>) =>
       unwrap<any[]>(api.get('/invoices', { params })),

@@ -59,8 +59,24 @@ export class BillingService {
   }
 
   /** Statement view — invoices + payments interleaved with running balance. */
-  async customerLedger(customerId: number) {
+  /**
+   * Zoho-style customer statement — chronological invoices + payments with
+   * a running balance, plus an "Opening Balance" carried forward when a
+   * date range is passed (Σ of everything before fromDate).
+   *
+   * Payment rows include an itemised "for payment of INV-###" breakdown
+   * from their PaymentAllocation rows so the operator can see exactly
+   * which invoices each receipt settled (matches the sample statement's
+   * Details column).
+   */
+  async customerLedger(
+    customerId: number,
+    range: { fromDate?: string; toDate?: string } = {},
+  ) {
     const customer = await this.getCustomer(customerId);
+    const from = range.fromDate ? new Date(range.fromDate) : null;
+    const to   = range.toDate   ? new Date(range.toDate + 'T23:59:59.999Z') : null;
+
     const [invoices, payments] = await Promise.all([
       this.prisma.invoice.findMany({
         where: { customerId, status: { not: 'CANCELLED' } },
@@ -68,39 +84,103 @@ export class BillingService {
       }),
       this.prisma.payment.findMany({
         where: { customerId },
+        include: {
+          allocations: { include: { invoice: { select: { invoiceNumber: true } } } },
+        },
         orderBy: { paymentDate: 'asc' },
       }),
     ]);
+
     type Row = {
-      date: Date; ref: string; description: string;
-      debit: number; credit: number; balance: number; kind: 'INVOICE' | 'PAYMENT';
+      date: Date; ref: string; description: string; details: string[];
+      debit: number; credit: number; balance: number;
+      kind: 'INVOICE' | 'PAYMENT' | 'OPENING';
       id: number;
     };
-    const rows: Row[] = [
-      ...invoices.map((i) => ({
-        date: i.invoiceDate, ref: i.invoiceNumber,
-        description: i.type === 'TAX_INVOICE' ? 'Tax Invoice' : i.type === 'ESTIMATE' ? 'Estimate' : 'Delivery Challan',
-        debit: i.type === 'DELIVERY_CHALLAN' ? 0 : Number(i.totalAmount),
-        credit: 0, balance: 0, kind: 'INVOICE' as const, id: i.id,
-      })),
-      ...payments.map((p) => ({
-        date: p.paymentDate, ref: p.paymentNumber,
-        description: `Receipt — ${p.mode}${p.reference ? ` · ${p.reference}` : ''}`,
-        debit: 0, credit: Number(p.amount),
-        balance: 0, kind: 'PAYMENT' as const, id: p.id,
-      })),
-    ].sort((a, b) => a.date.getTime() - b.date.getTime());
-    let running = 0;
+
+    // Everything that predates the window folds into a single Opening
+    // Balance row (Σ debits − Σ credits before fromDate).
+    let opening = 0;
+    const inWindow: Row[] = [];
+    for (const i of invoices) {
+      const amt = i.type === 'DELIVERY_CHALLAN' ? 0 : Number(i.totalAmount);
+      const dt  = new Date(i.invoiceDate);
+      if (from && dt < from) { opening = r2(opening + amt); continue; }
+      if (to && dt > to)     continue;
+      inWindow.push({
+        date: dt, ref: i.invoiceNumber,
+        description: i.type === 'TAX_INVOICE' ? 'Invoice'
+                   : i.type === 'ESTIMATE' || i.type === 'QUOTE' ? 'Estimate'
+                   : i.type === 'CREDIT_NOTE' ? 'Credit Note'
+                   : i.type === 'TEMP_INVOICE' ? 'Invoice (Temp)'
+                   : 'Delivery Challan',
+        details: i.dueDate ? [`Due ${new Date(i.dueDate).toLocaleDateString('en-IN')}`] : [],
+        debit: amt, credit: 0, balance: 0,
+        kind: 'INVOICE', id: i.id,
+      });
+    }
+    for (const p of payments) {
+      const amt = Number(p.amount);
+      const dt  = new Date(p.paymentDate);
+      if (from && dt < from) { opening = r2(opening - amt); continue; }
+      if (to && dt > to)     continue;
+      // "₹X for payment of INV-YYYY" — one line per allocation, matches
+      // the Zoho sample's Details column. Falls back to the receipt mode
+      // when no allocations are on the record.
+      const details = p.allocations.length
+        ? p.allocations.map((a) =>
+            `₹${Number(a.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })} for payment of ${a.invoice.invoiceNumber}`
+          )
+        : [`Receipt · ${p.mode}${p.reference ? ` · ${p.reference}` : ''}`];
+      inWindow.push({
+        date: dt, ref: p.paymentNumber,
+        description: 'Payment Received', details,
+        debit: 0, credit: amt, balance: 0,
+        kind: 'PAYMENT', id: p.id,
+      });
+    }
+    inWindow.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+    // Opening row (only when the filter clipped anything before it or
+    // when an explicit fromDate was passed — otherwise the running total
+    // just starts at 0 with no separate row).
+    const rows: Row[] = [];
+    if (from) {
+      rows.push({
+        date: from, ref: '', description: '***Opening Balance***', details: [],
+        debit: opening > 0 ? opening : 0,
+        credit: opening < 0 ? -opening : 0,
+        balance: opening, kind: 'OPENING', id: 0,
+      });
+    }
+    rows.push(...inWindow);
+
+    let running = opening;
     for (const r of rows) {
-      running = r2(running + r.debit - r.credit);
+      if (r.kind !== 'OPENING') {
+        running = r2(running + r.debit - r.credit);
+      }
       r.balance = running;
     }
+
+    const totalInvoicedInWindow = r2(inWindow
+      .filter((r) => r.kind === 'INVOICE')
+      .reduce((s, r) => s + r.debit, 0));
+    const totalPaidInWindow = r2(inWindow
+      .filter((r) => r.kind === 'PAYMENT')
+      .reduce((s, r) => s + r.credit, 0));
+
     return {
       customer,
+      range: {
+        fromDate: range.fromDate ?? null,
+        toDate:   range.toDate   ?? null,
+      },
+      openingBalance: r2(opening),
       rows,
       closingBalance: running,
-      totalInvoiced: r2(invoices.reduce((s, i) => s + (i.type !== 'DELIVERY_CHALLAN' ? Number(i.totalAmount) : 0), 0)),
-      totalPaid: r2(payments.reduce((s, p) => s + Number(p.amount), 0)),
+      totalInvoiced: totalInvoicedInWindow,
+      totalPaid: totalPaidInWindow,
     };
   }
 
