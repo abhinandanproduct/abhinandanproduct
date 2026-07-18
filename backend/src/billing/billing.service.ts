@@ -217,10 +217,12 @@ export class BillingService {
       case 'DELIVERY_CHALLAN': return 'DC';
       case 'CREDIT_NOTE':      return 'CN';
       case 'ESTIMATE':         return 'EST'; // legacy
-      // TEMP_INVOICE shares the tax-invoice prefix on purpose — the whole
-      // point is that the printed bill looks like a real invoice. Only
-      // the UI badge + the DB type reveal it's temporary.
-      case 'TEMP_INVOICE':     return 'ABN-';
+      // TEMP_INVOICE now uses its own INV- prefix (was ABN-). Sharing
+      // the tax-invoice prefix caused interleaved sequences — a temp
+      // silently consumed ABN-000003 that a real tax invoice should
+      // have gotten. Distinct prefix keeps the two counters clean and
+      // the printed PDF still shows "TAX INVOICE" as the heading.
+      case 'TEMP_INVOICE':     return 'INV-';
       default: return 'DOC';
     }
   }
@@ -680,9 +682,9 @@ export class BillingService {
       await this.prisma.invoice.delete({ where: { id: existingTemp.id } });
     }
     // First-time generation: mirror the estimate's numeric suffix so the temp
-    // shares its identity with the source. EST0007 → ABN-000007 (temp shares
-    // the tax-invoice prefix + 6-digit pad per operator spec). If the derived
-    // number is already taken by an unrelated invoice, fall back to auto.
+    // shares its identity with the source. EST0007 → INV-000007 (temp uses
+    // its own INV- prefix now; 6-digit pad). If the derived number is
+    // already taken by another temp, fall back to auto.
     if (!mirrorNumber) {
       const suffix = String(src.invoiceNumber ?? '').match(/(\d+)$/);
       if (suffix) {
