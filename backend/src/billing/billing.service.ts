@@ -761,33 +761,11 @@ export class BillingService {
       take: 200,
     });
 
-    // Estimates carry an extra "how much silver has been allocated from the
-    // customer's advance towards this estimate?" tally. Sourced from the
-    // customer_metal_ledger — every DRAW_INTO_INVOICE event with
-    // refType='estimate' AND refId=<invoice.id> counts against this
-    // estimate's requirement. Batched into ONE groupBy query keyed by
-    // refId so we don't fan out N ledger queries.
+    // Estimates carry the silver-requirement tally as a bonus field so the
+    // list page can render "how much silver this estimate needs" without a
+    // second call. The invoice-side allocation UI (metal-invoice → covers
+    // estimates) is built separately and updates its own tracking table.
     const isEstimateList = q.type === 'QUOTE' || q.type === 'ESTIMATE';
-    const invoiceIds = rows.map((r) => r.id);
-    const allocByEstimate = new Map<number, number>();
-    if (isEstimateList && invoiceIds.length) {
-      const groups = await this.prisma.customerMetalLedger.groupBy({
-        by: ['refId'],
-        where: {
-          eventType: 'DRAW_INTO_INVOICE',
-          refType: 'estimate',
-          refId: { in: invoiceIds },
-        },
-        _sum: { weight: true },
-      });
-      for (const g of groups) {
-        if (g.refId != null) {
-          // Ledger stores draws as NEGATIVE weight (balance −). Flip sign
-          // for the display total so it reads as "grams allocated".
-          allocByEstimate.set(g.refId, Math.abs(Number(g._sum.weight ?? 0)));
-        }
-      }
-    }
 
     // Attach summary totals so the list page can render them without loading
     // full item arrays into the UI. totalWeightG (header override) wins over
@@ -808,15 +786,7 @@ export class BillingService {
         lineCount: items.length,
       };
       if (isEstimateList) {
-        const required = Math.round(totalWeight * 1000) / 1000;
-        const allocated = Math.round((allocByEstimate.get(inv.id) ?? 0) * 1000) / 1000;
-        const status =
-          allocated <= 0 ? 'OPEN'
-          : allocated + 0.0005 >= required ? 'CLOSED'
-          : 'PARTIAL';
-        summary.silverRequiredG = required;
-        summary.silverAllocatedG = allocated;
-        summary.silverStatus = status;
+        summary.silverRequiredG = Math.round(totalWeight * 1000) / 1000;
       }
       return { ...rest, summary };
     });
