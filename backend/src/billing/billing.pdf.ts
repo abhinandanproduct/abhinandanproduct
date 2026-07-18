@@ -1018,7 +1018,10 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
     doc.fillColor('#000000').font('Helvetica-Bold').fontSize(10)
        .text('Silver received against', M, coversY, { lineBreak: false });
     doc.fillColor('#000000').font('Helvetica').fontSize(9);
-    const bulletW = innerW; // full width; totals box is above this section
+    // Coverage section renders on the LEFT column next to the totals box
+    // (Adjustment / Total / Balance Due) on the right, so we must leave
+    // that column free. Width matches the notes section above.
+    const bulletW = innerW - tboxW - 20;
     let ly = coversY + 16;
     for (const c of inv.coverages) {
       const isPartial = c.status === 'PARTIAL';
