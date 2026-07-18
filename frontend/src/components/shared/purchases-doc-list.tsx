@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
+import { SortableTh, useTableSort } from './sortable-table';
 
 const STATUS_BADGE: Record<string, string> = {
   DRAFT:     'bg-secondary text-muted-foreground',
@@ -39,6 +40,15 @@ export function PurchasesDocList({
       toDate: fy.end,
     }),
   });
+  const { sorted, sortKey, sortDir, toggle } = useTableSort<any>(
+    q.data,
+    'billDate',
+    'asc',
+    {
+      totalAmount:   (r) => Number(r.totalAmount),
+      balanceAmount: (r) => Number(r.balanceAmount),
+    },
+  );
   return (
     <div className="space-y-4">
       <PageHeader
@@ -64,17 +74,17 @@ export function PurchasesDocList({
             <table className="w-full text-sm">
               <thead className="bg-secondary/30 text-left text-xs text-muted-foreground">
                 <tr>
-                  <th className="px-4 py-2">Number</th>
-                  <th className="px-4 py-2">Date</th>
-                  <th className="px-4 py-2">Vendor</th>
-                  <th className="px-4 py-2">Vendor Ref</th>
-                  <th className="px-4 py-2">Status</th>
-                  <th className="px-4 py-2 text-right">Total</th>
-                  <th className="px-4 py-2 text-right">Balance</th>
+                  <SortableTh label="Number"     sortKey="billNumber"      currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Date"       sortKey="billDate"        currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Vendor"     sortKey="vendorName"      currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Vendor Ref" sortKey="vendorRefNumber" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Status"     sortKey="status"          currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Total"      sortKey="totalAmount"     currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" />
+                  <SortableTh label="Balance"    sortKey="balanceAmount"   currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" />
                 </tr>
               </thead>
               <tbody>
-                {(q.data ?? []).map((b) => (
+                {sorted.map((b) => (
                   <tr key={b.id} className="border-t border-border hover:bg-secondary/20">
                     <td className="px-4 py-2 font-semibold">
                       <Link href={`/purchases/bills/${b.id}`} className="text-info hover:underline">
@@ -97,7 +107,7 @@ export function PurchasesDocList({
                     </td>
                   </tr>
                 ))}
-                {(q.data ?? []).length === 0 && (
+                {sorted.length === 0 && (
                   <tr><td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">Nothing here yet.</td></tr>
                 )}
               </tbody>

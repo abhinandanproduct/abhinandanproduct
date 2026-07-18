@@ -15,6 +15,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Dialog } from '@/components/ui/dialog';
 import { PageHeader } from '@/components/shared/page-header';
 import { useConfirm } from '@/components/shared/confirm-dialog';
+import { SortableTh, useTableSort } from '@/components/shared/sortable-table';
 import { formatDate } from '@/lib/utils';
 
 // Same module-level filter cache pattern as the Items / Vendors / Activity
@@ -58,6 +59,11 @@ export default function UsersAdminPage() {
       status: status || undefined,
     }),
   });
+  const { sorted: sortedUsers, sortKey, sortDir, toggle } = useTableSort<any>(
+    usersQ.data as any[] | undefined,
+    'fullName',
+    'asc',
+  );
 
   const remove = useMutation({
     mutationFn: (id: number) => Api.users.remove(id),
@@ -111,16 +117,16 @@ export default function UsersAdminPage() {
               <table className="w-full min-w-[820px] text-sm">
                 <thead className="text-left text-xs uppercase tracking-wider text-muted-foreground">
                   <tr>
-                    <th className="px-4 py-2 font-semibold">User</th>
-                    <th className="px-4 py-2 font-semibold">Email</th>
-                    <th className="px-4 py-2 font-semibold">Role</th>
-                    <th className="px-4 py-2 font-semibold">Status</th>
-                    <th className="px-4 py-2 font-semibold">Last login</th>
+                    <SortableTh label="User"       sortKey="fullName"    currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                    <SortableTh label="Email"      sortKey="email"       currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                    <SortableTh label="Role"       sortKey="role"        currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                    <SortableTh label="Status"     sortKey="status"      currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                    <SortableTh label="Last login" sortKey="lastLoginAt" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
                     <th className="px-4 py-2 text-right font-semibold">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(usersQ.data ?? []).map((u: any) => (
+                  {sortedUsers.map((u: any) => (
                     <tr key={u.id} className="border-t border-border align-middle hover:bg-muted/30">
                       <td className="px-4 py-2">
                         <div className="font-semibold text-foreground">{u.fullName || '—'}</div>
