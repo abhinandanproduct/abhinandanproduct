@@ -142,20 +142,20 @@ export function BillingDocList({
             <table className="w-full text-sm">
               <thead className="bg-secondary/30 text-left text-xs text-muted-foreground">
                 <tr>
-                  <SortableTh label="Number"   sortKey="invoiceNumber"  currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
-                  <SortableTh label="Date"     sortKey="invoiceDate"    currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
-                  <SortableTh label="Customer" sortKey="billToName"     currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
-                  <SortableTh label="Status"   sortKey="status"         currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Number"   sortKey="invoiceNumber"  currentKey={sortKey} currentDir={sortDir} onToggle={toggle} className="px-2 py-2" />
+                  <SortableTh label="Date"     sortKey="invoiceDate"    currentKey={sortKey} currentDir={sortDir} onToggle={toggle} className="px-2 py-2" />
+                  <SortableTh label="Customer" sortKey="billToName"     currentKey={sortKey} currentDir={sortDir} onToggle={toggle} className="px-2 py-2" />
+                  <SortableTh label="Status"   sortKey="status"         currentKey={sortKey} currentDir={sortDir} onToggle={toggle} className="px-2 py-2" />
                   {isEstimate && (
                     <>
-                      <SortableTh label="Silver Req.g" sortKey="silverRequiredG"  currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" />
-                      <SortableTh label="Alloc.g"      sortKey="silverAllocatedG" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" />
-                      <SortableTh label="Silver"       sortKey="silverStatus"     currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                      <SortableTh label="Silver Req.g" sortKey="silverRequiredG"  currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" className="px-2 py-2" />
+                      <SortableTh label="Alloc.g"      sortKey="silverAllocatedG" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" className="px-2 py-2" />
+                      <SortableTh label="Silver"       sortKey="silverStatus"     currentKey={sortKey} currentDir={sortDir} onToggle={toggle} className="px-2 py-2" />
                     </>
                   )}
-                  <SortableTh label="Total"    sortKey="totalAmount"    currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" />
-                  <SortableTh label="Balance"  sortKey="balanceAmount"  currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" />
-                  <th className="px-4 py-2 text-right whitespace-nowrap">Actions</th>
+                  <SortableTh label="Total"    sortKey="totalAmount"    currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" className="px-2 py-2" />
+                  <SortableTh label="Balance"  sortKey="balanceAmount"  currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" className="px-2 py-2" />
+                  <th className="px-2 py-2 text-right whitespace-nowrap">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -173,7 +173,7 @@ export function BillingDocList({
                       )}
                     </td>
                     <td className="px-2 py-2 text-xs whitespace-nowrap">{new Date(inv.invoiceDate).toLocaleDateString('en-IN')}</td>
-                    <td className="px-2 py-2 max-w-[160px] truncate" title={inv.billToName}>{inv.billToName}</td>
+                    <td className="px-2 py-2 max-w-[130px] truncate" title={inv.billToName}>{inv.billToName}</td>
                     <td className="px-2 py-2">
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${STATUS_BADGE[inv.status] ?? STATUS_BADGE.DRAFT}`}>
                         {inv.status}
@@ -200,18 +200,18 @@ export function BillingDocList({
                     <td className="px-2 py-2 text-right tabular-nums text-warning whitespace-nowrap">
                       ₹{Number(inv.balanceAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
-                    <td className="px-4 py-2">
-                      <div className="flex justify-end gap-1">
+                    <td className="px-2 py-2 whitespace-nowrap">
+                      <div className="flex justify-end gap-0.5">
                         {showTempAction && inv.status !== 'CANCELLED' && (
-                          <Button variant="outline" size="sm" className="h-8 px-2 text-xs"
-                            title="Consolidate all lines into a single-row Temp Invoice (prints as regular invoice)"
+                          <Button variant="outline" size="icon"
+                            title="Generate Temp Invoice — consolidate all lines into a single silver row (prints as regular invoice)"
                             disabled={genTemp.isPending}
                             onClick={() => {
                               if (confirm(`Generate temp invoice from ${inv.invoiceNumber}?\n\nAll line items will be summed into ONE consolidated silver row. Prints as a regular invoice; the TEMP marker is software-only.`)) {
                                 genTemp.mutate(inv.id);
                               }
                             }}>
-                            <FileText className="size-3.5" /> Temp
+                            <FileText className="size-4" />
                           </Button>
                         )}
                         <Button variant="outline" size="icon" title="Print"
