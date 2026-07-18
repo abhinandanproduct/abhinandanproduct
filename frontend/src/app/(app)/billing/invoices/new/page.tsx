@@ -138,7 +138,11 @@ export default function NewInvoicePage() {
   // Estimate coverages — only meaningful for TAX_INVOICE with a "Mixed
   // Silver Jewellery" line. Map from estimateId → grams string. Populated
   // via the coverage-picker dialog reachable from the header field.
-  const [coverages, setCoverages] = React.useState<Record<number, string>>({});
+  // Now carries both the grams to cover and an "includeOtherCharges" toggle
+  // that pulls that estimate's Σ(making + extra) into an "Other Charges"
+  // synthesized line on the ABN.
+  type CovEntry = { grams: string; include: boolean };
+  const [coverages, setCoverages] = React.useState<Record<number, CovEntry>>({});
   const [coverageOpen, setCoverageOpen] = React.useState(false);
 
   const customersQ = useQuery<any[]>({
@@ -177,9 +181,17 @@ export default function NewInvoicePage() {
   const showCoverageField = type === 'TAX_INVOICE' && hasMixedSilverLine;
   const coverageTotals = React.useMemo(() => {
     const entries = Object.entries(coverages)
-      .filter(([, v]) => Number(v) > 0)
-      .map(([id, v]) => ({ estimateId: Number(id), grams: Number(v) }));
-    return { count: entries.length, grams: entries.reduce((s, e) => s + e.grams, 0), entries };
+      .filter(([, v]) => Number(v.grams) > 0 || v.include)
+      .map(([id, v]) => ({
+        estimateId: Number(id),
+        grams: Number(v.grams) || 0,
+        include: !!v.include,
+      }));
+    return {
+      count: entries.length,
+      grams: entries.reduce((s, e) => s + e.grams, 0),
+      entries,
+    };
   }, [coverages]);
 
   // Reset coverages when customer or type changes — stale selection would
@@ -302,7 +314,13 @@ export default function NewInvoicePage() {
     })));
     // Line items — hydrate every field back to string form so the
     // controlled inputs don't NaN-out.
-    setLines(((inv.items ?? []) as any[]).map((it: any): LineRow => ({
+    // Filter out the synthesized "Other Charges" line — that row is
+    // controlled from the coverage picker's include-toggles, not the
+    // regular line editor. Backend re-inserts it on every save based on
+    // the current toggles.
+    setLines(((inv.items ?? []) as any[])
+      .filter((it: any) => it.itemNumber !== '__OTHER_CHARGES__')
+      .map((it: any): LineRow => ({
       _k: Math.random(),
       itemId: it.itemId ?? '',
       // InvoiceItem schema doesn't persist the variant reference, so
@@ -354,9 +372,12 @@ export default function NewInvoicePage() {
     // had previously chosen.
     const covs = (editQ.data as any).coverages ?? [];
     if (covs.length) {
-      const next: Record<number, string> = {};
+      const next: Record<number, CovEntry> = {};
       for (const c of covs) {
-        next[Number(c.estimateId)] = String(Number(c.silverAllocatedG).toFixed(3));
+        next[Number(c.estimateId)] = {
+          grams: String(Number(c.silverAllocatedG).toFixed(3)),
+          include: !!c.includeOtherCharges,
+        };
       }
       setCoverages(next);
     }
@@ -514,6 +535,7 @@ export default function NewInvoicePage() {
           ? coverageTotals.entries.map((e) => ({
               estimateId: e.estimateId,
               silverAllocatedG: e.grams,
+              includeOtherCharges: e.include,
             }))
           : undefined,
       };
@@ -1175,26 +1197,34 @@ export default function NewInvoicePage() {
  * Silver Jewellery grams are exhausted (FIFO by estimate id, matches the
  * ordering the estimate list uses).
  */
+type CoveragePickerEntry = { grams: string; include: boolean };
 function CoveragePickerDialog({
   open, estimates, value, onClose, onSave,
 }: {
   open: boolean;
   estimates: any[];
-  value: Record<number, string>;
+  value: Record<number, CoveragePickerEntry>;
   onClose: () => void;
-  onSave: (next: Record<number, string>) => void;
+  onSave: (next: Record<number, CoveragePickerEntry>) => void;
 }) {
-  const [local, setLocal] = React.useState<Record<number, string>>(value);
+  const [local, setLocal] = React.useState<Record<number, CoveragePickerEntry>>(value);
   React.useEffect(() => { if (open) setLocal(value); }, [open, value]);
 
-  const total = Object.values(local).reduce((s, v) => s + (Number(v) || 0), 0);
+  const total = Object.values(local).reduce((s, v) => s + (Number(v?.grams) || 0), 0);
   const overRows = estimates.some((e) => {
     const req   = Number(e.summary?.silverRequiredG  ?? 0);
     const done  = Number(e.summary?.silverAllocatedG ?? 0);
     const remain = Math.max(0, req - done);
-    const cur   = Number(local[e.id] || 0);
+    const cur   = Number(local[e.id]?.grams || 0);
     return cur > remain + 0.0005;
   });
+  // Total "Other Charges" that will fold into the synthesized ABN line
+  // once toggles are honored — the sum of Σ(making + extra) across every
+  // estimate whose "Include" box is ticked in this dialog.
+  const otherChargesTotal = estimates.reduce((s, e) => {
+    if (!local[e.id]?.include) return s;
+    return s + Number(e.summary?.otherChargesAmt ?? 0);
+  }, 0);
 
   return (
     <Dialog
@@ -1202,12 +1232,12 @@ function CoveragePickerDialog({
       onClose={onClose}
       size="lg"
       title="Estimates Covered"
-      description="How many grams of this invoice's silver settle each of the customer's open estimates. Backend rejects any row that exceeds its remaining need."
+      description="How many grams of this invoice's silver settle each of the customer's open estimates. Backend rejects any row that exceeds its remaining need. Tick 'Include other charges' to roll that estimate's (making + additional) sum into an 'Other Charges' line on the invoice."
       footer={
         <>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button onClick={() => onSave(local)} disabled={overRows}>
-            Save · {total.toFixed(3)} g
+            Save · {total.toFixed(3)} g{otherChargesTotal > 0 ? ` + ₹${otherChargesTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : ''}
           </Button>
         </>
       }
@@ -1226,15 +1256,19 @@ function CoveragePickerDialog({
                 <th className="px-3 py-2 text-right">Already alloc.</th>
                 <th className="px-3 py-2 text-right">Remaining</th>
                 <th className="px-3 py-2 text-right">Cover g</th>
+                <th className="px-3 py-2 text-right">Other Charges ₹</th>
+                <th className="px-3 py-2 text-center">Include</th>
               </tr>
             </thead>
             <tbody>
               {estimates.map((e) => {
-                const req    = Number(e.summary?.silverRequiredG  ?? 0);
-                const done   = Number(e.summary?.silverAllocatedG ?? 0);
-                const remain = Math.max(0, req - done);
-                const cur    = Number(local[e.id] || 0);
-                const over   = cur > remain + 0.0005;
+                const req      = Number(e.summary?.silverRequiredG  ?? 0);
+                const done     = Number(e.summary?.silverAllocatedG ?? 0);
+                const remain   = Math.max(0, req - done);
+                const other    = Number(e.summary?.otherChargesAmt ?? 0);
+                const cur      = Number(local[e.id]?.grams || 0);
+                const included = !!local[e.id]?.include;
+                const over     = cur > remain + 0.0005;
                 return (
                   <tr key={e.id} className="border-t border-border">
                     <td className="px-3 py-2 font-semibold">{e.invoiceNumber}</td>
@@ -1244,10 +1278,23 @@ function CoveragePickerDialog({
                     <td className="px-3 py-2 text-right">
                       <Input
                         type="number" step="0.001" min="0" max={remain}
-                        value={local[e.id] ?? ''}
-                        onChange={(ev) => setLocal((r) => ({ ...r, [e.id]: ev.target.value }))}
+                        value={local[e.id]?.grams ?? ''}
+                        onChange={(ev) => setLocal((r) => ({ ...r, [e.id]: { grams: ev.target.value, include: r[e.id]?.include ?? false } }))}
                         placeholder="0.000"
                         className={`h-8 w-24 text-right ${over ? 'border-destructive' : ''}`}
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums text-xs">
+                      {other.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </td>
+                    <td className="px-3 py-2 text-center">
+                      <input
+                        type="checkbox"
+                        checked={included}
+                        disabled={other <= 0}
+                        onChange={(ev) => setLocal((r) => ({ ...r, [e.id]: { grams: r[e.id]?.grams ?? '', include: ev.target.checked } }))}
+                        className="size-4 cursor-pointer"
+                        title={other <= 0 ? 'No other charges on this estimate' : 'Roll this estimate\'s making + additional into the invoice'}
                       />
                     </td>
                   </tr>
@@ -1258,6 +1305,10 @@ function CoveragePickerDialog({
               <tr className="border-t border-border bg-secondary/30 font-semibold">
                 <td colSpan={4} className="px-3 py-2 text-right">Total covered</td>
                 <td className="px-3 py-2 text-right tabular-nums">{total.toFixed(3)} g</td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  ₹{otherChargesTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                </td>
+                <td />
               </tr>
             </tfoot>
           </table>

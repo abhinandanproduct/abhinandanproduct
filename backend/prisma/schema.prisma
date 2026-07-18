@@ -1887,11 +1887,15 @@ model Invoice {
 // Cascade-delete on invoice removal so canceling an ABN unwinds every
 // estimate it was covering — those estimates re-open.
 model InvoiceEstimateCoverage {
-  id                Int      @id @default(autoincrement())
-  invoiceId         Int      @map("invoice_id")     // the TAX_INVOICE
-  estimateId        Int      @map("estimate_id")    // the QUOTE / ESTIMATE
-  silverAllocatedG  Decimal  @map("silver_allocated_g") @db.Decimal(12, 3)
-  createdAt         DateTime @default(now()) @map("created_at")
+  id                    Int      @id @default(autoincrement())
+  invoiceId             Int      @map("invoice_id")     // the TAX_INVOICE
+  estimateId            Int      @map("estimate_id")    // the QUOTE / ESTIMATE
+  silverAllocatedG      Decimal  @map("silver_allocated_g") @db.Decimal(12, 3)
+  // Operator's toggle: when true, this estimate's Σ(making + extraAmount)
+  // over its line items rolls into the ABN's "Other Charges" synthesized
+  // line. Kept per-coverage so re-editing shows the same boxes ticked.
+  includeOtherCharges   Boolean  @default(false) @map("include_other_charges")
+  createdAt             DateTime @default(now()) @map("created_at")
 
   invoice   Invoice @relation("MetalInvoiceCoverages", fields: [invoiceId], references: [id], onDelete: Cascade)
   estimate  Invoice @relation("EstimateCoveredBy",     fields: [estimateId], references: [id], onDelete: Restrict)

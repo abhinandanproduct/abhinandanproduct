@@ -132,6 +132,7 @@ export class CreateInvoiceDto {
 export class InvoiceCoverageDto {
   @IsInt() estimateId!: number;
   @IsNumber() @Min(0) silverAllocatedG!: number;
+  @IsOptional() @IsBoolean() includeOtherCharges?: boolean;
 }
 
 // ---------- Payment ----------

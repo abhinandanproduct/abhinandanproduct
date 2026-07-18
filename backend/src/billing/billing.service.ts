@@ -927,12 +927,71 @@ export class BillingService {
     }
 
     await this.prisma.invoiceEstimateCoverage.createMany({
-      data: coverages.map((c) => ({
+      data: coverages.map((c: any) => ({
         invoiceId: invoice.id,
         estimateId: c.estimateId,
         silverAllocatedG: r3(Number(c.silverAllocatedG)),
+        includeOtherCharges: !!c.includeOtherCharges,
       })),
     });
+
+    // Synthesized "Other Charges" line — one row on the invoice items table
+    // whose amount = Σ(making + extra) over every toggled estimate's items.
+    // Removed first so we don't accumulate stale ones on re-save. Identified
+    // by a special itemNumber marker so the frontend can hide it from the
+    // regular line-item editor if it wants to.
+    const MARKER = '__OTHER_CHARGES__';
+    await this.prisma.invoiceItem.deleteMany({
+      where: { invoiceId: invoice.id, itemNumber: MARKER },
+    });
+    const toggled = coverages.filter((c: any) => c.includeOtherCharges);
+    if (toggled.length) {
+      let otherChargesTotal = 0;
+      const bits: string[] = [];
+      for (const cov of toggled) {
+        const est = byId.get(cov.estimateId)!;
+        const estFullItems = await this.prisma.invoiceItem.findMany({
+          where: { invoiceId: cov.estimateId },
+          select: { makingAmount: true, extraAmount: true },
+        });
+        otherChargesTotal += this.otherChargesTotalFromItems(estFullItems as any);
+        bits.push(est.invoiceNumber);
+      }
+      otherChargesTotal = r2(otherChargesTotal);
+      if (otherChargesTotal > 0) {
+        await this.prisma.invoiceItem.create({
+          data: {
+            invoiceId: invoice.id,
+            itemNumber: MARKER,
+            description: `Other Charges from ${bits.join(', ')}`,
+            hsnCode: null,
+            quantity: 1,
+            weightG: 0,
+            silverRatePerG: 0,
+            makingRatePerG: 0,
+            silverAmount: 0,
+            makingAmount: 0,
+            extraAmount: otherChargesTotal,
+            lineAmount: otherChargesTotal,
+          },
+        });
+        // The invoice's totalAmount was computed inside createInvoice /
+        // updateInvoice from the DTO's lines only. This synthesized line
+        // is added after the fact, so bump totalAmount + balanceAmount by
+        // the same amount to keep them in sync. GST recalc is skipped for
+        // MVP — an operator-level "other charges" line is typically
+        // GST-inclusive in the estimate it came from.
+        const inv = await this.prisma.invoice.findUnique({ where: { id: invoice.id } });
+        if (inv) {
+          const nextTotal = r2(Number(inv.totalAmount) + otherChargesTotal);
+          const nextBal   = r2(Number(inv.balanceAmount) + otherChargesTotal);
+          await this.prisma.invoice.update({
+            where: { id: invoice.id },
+            data: { totalAmount: nextTotal, balanceAmount: nextBal },
+          });
+        }
+      }
+    }
   }
 
   async listInvoices(q: { type?: InvoiceTypeStr; customerId?: number; status?: string; search?: string; fromDate?: string; toDate?: string }) {
@@ -956,7 +1015,9 @@ export class BillingService {
       where,
       include: {
         customer: true,
-        items: { select: { quantity: true, weightG: true } },
+        // Pull makingAmount + extraAmount when the list is estimates so the
+        // coverage-picker gets each row's "Other Charges" total for free.
+        items: { select: { quantity: true, weightG: true, makingAmount: true, extraAmount: true } },
       },
       // Sort by invoice number ascending — every list is already filtered
       // to one type, so the alphabetic sort keeps the sequence in numeric
@@ -1012,6 +1073,7 @@ export class BillingService {
         summary.silverRequiredG  = required;
         summary.silverAllocatedG = allocated;
         summary.silverStatus     = status;
+        summary.otherChargesAmt  = this.otherChargesTotalFromItems(items as any);
       }
       return { ...rest, summary };
     });
@@ -1042,7 +1104,9 @@ export class BillingService {
     if (!inv) throw new NotFoundException('Invoice not found.');
     // Enrich each coverage with a computed { requiredG, allocatedG,
     // remainingG, status } so the PDF/UI can render without repeating
-    // the derivation.
+    // the derivation. Also carries the estimate's total "other charges"
+    // (Σ making + extra across every line) so the coverage picker can
+    // show the amount next to the toggle checkbox.
     const enrichedCoverages = (inv as any).coverages?.map((c: any) => {
       const est = c.estimate;
       const derivedWt = est.items.reduce(
@@ -1067,10 +1131,24 @@ export class BillingService {
         estimateId: c.estimateId,
         estimateNumber: est.invoiceNumber,
         silverAllocatedG: Number(c.silverAllocatedG),
+        includeOtherCharges: !!c.includeOtherCharges,
         requiredG, allocatedG, remainingG, status,
       };
     }) ?? [];
     return { ...inv, coverages: enrichedCoverages };
+  }
+
+  /**
+   * Total of the operator-configured "other charges" (Σ makingAmount +
+   * extraAmount over every InvoiceItem row) for a given estimate id.
+   * Used by the coverage picker to show the toggleable amount next to
+   * each estimate.
+   */
+  private otherChargesTotalFromItems(items: Array<{ makingAmount: any; extraAmount: any }>): number {
+    return r2(items.reduce(
+      (s, it) => s + Number(it.makingAmount ?? 0) + Number(it.extraAmount ?? 0),
+      0,
+    ));
   }
 
   async cancelInvoice(id: number) {
