@@ -380,15 +380,15 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
               // sum: 18+118+40+28+56+54+54+82+97 = 547
             ]
           : [
-              // Landscape interstate (15 cols · 794pt). Money widths sized
-              // to fit CRORE-scale totals ("Rs. 9,99,99,999.99" ≈ 80pt @
-              // 9pt bold) without ellipsis clipping. Item column narrows
-              // to make room; multi-line label wrap handles the descent.
+              // Landscape interstate (14 cols · 794pt). % sub-column
+              // removed — rate is baked into the IGST header ("IGST 3%")
+              // per operator spec. Freed width reallocated to Wt/pc and
+              // Item so per-piece values like "476.150" don't truncate.
               { label: '#',                  w: 20,  align: 'center' },
-              { label: 'Item & Description', w: 82,  align: 'left'   },
+              { label: 'Item & Description', w: 90,  align: 'left'   },
               { label: 'HSN/SAC',            w: 50,  align: 'center' },
               { label: 'Qty',                w: 26,  align: 'right'  },
-              { label: 'Wt/pc',              w: 36,  align: 'right'  },
+              { label: 'Wt/pc',              w: 46,  align: 'right'  },
               { label: 'Gross Wt',           w: 48,  align: 'right'  },
               { label: 'Less Wt',            w: 42,  align: 'right'  },
               { label: 'Net Wt',             w: 48,  align: 'right'  },
@@ -396,10 +396,9 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
               { label: 'Making',             w: 68,  align: 'right'  },
               { label: 'Addl Chrg',          w: 58,  align: 'right'  },
               { label: 'S + M + A',          w: 74,  align: 'right'  },
-              { label: 'IGST %',             w: 34,  align: 'right'  },
-              { label: 'IGST Amt',           w: 60,  align: 'right'  },
-              { label: 'Amount',             w: 76,  align: 'right'  },
-              // sum: 20+82+50+26+36+48+42+48+72+68+58+74+34+60+76 = 794
+              { label: `IGST ${gstPct.toFixed(1)}%`, w: 66,  align: 'right'  },
+              { label: 'Amount',             w: 86,  align: 'right'  },
+              // sum: 20+90+50+26+46+48+42+48+72+68+58+74+66+86 = 794
             ]
         : compactMoneyCols
           ? [
@@ -425,28 +424,28 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
               // sum: 18+118+40+28+56+54+54+82+97 = 547
             ]
           : [
-              // Landscape intra-state (17 cols · 794pt). Money widths
-              // sized to fit CRORE-scale line totals ("Rs. 99,99,999.99"
-              // ~63pt @ 9pt bold) so a 1-2 crore grand total prints
-              // without ellipsis. Item narrows to release space.
-              { label: '#',                  w: 18, align: 'center' },
-              { label: 'Item & Description', w: 56, align: 'left'   },
-              { label: 'HSN/SAC',            w: 38, align: 'center' },
-              { label: 'Qty',                w: 22, align: 'right'  },
-              { label: 'Wt/pc',              w: 32, align: 'right'  },
-              { label: 'Gross Wt',           w: 44, align: 'right'  },
-              { label: 'Less Wt',            w: 40, align: 'right'  },
-              { label: 'Net Wt',             w: 44, align: 'right'  },
+              // Landscape intra-state (15 cols · 794pt). CGST/SGST %
+              // sub-columns removed — rate is baked into the header
+              // labels ("CGST 1.5%", "SGST 1.5%") per operator spec.
+              // 64pt of freed width redistributed: Wt/pc grows so
+              // per-piece values print in full, Item column widens so
+              // description doesn't crush.
+              { label: '#',                  w: 20, align: 'center' },
+              { label: 'Item & Description', w: 66, align: 'left'   },
+              { label: 'HSN/SAC',            w: 40, align: 'center' },
+              { label: 'Qty',                w: 24, align: 'right'  },
+              { label: 'Wt/pc',              w: 44, align: 'right'  },
+              { label: 'Gross Wt',           w: 48, align: 'right'  },
+              { label: 'Less Wt',            w: 44, align: 'right'  },
+              { label: 'Net Wt',             w: 48, align: 'right'  },
               { label: 'Silver',             w: 62, align: 'right'  },
               { label: 'Making',             w: 62, align: 'right'  },
-              { label: 'Addl Chrg',          w: 58, align: 'right'  },
-              { label: 'S + M + A',          w: 68, align: 'right'  },
-              { label: 'CGST %',             w: 32, align: 'right'  },
-              { label: 'CGST Amt',           w: 56, align: 'right'  },
-              { label: 'SGST %',             w: 32, align: 'right'  },
-              { label: 'SGST Amt',           w: 56, align: 'right'  },
-              { label: 'Amount',             w: 74, align: 'right'  },
-              // sum: 18+56+38+22+32+44+40+44+62+62+58+68+32+56+32+56+74 = 794
+              { label: 'Addl Chrg',          w: 60, align: 'right'  },
+              { label: 'S + M + A',          w: 72, align: 'right'  },
+              { label: `CGST ${halfPct.toFixed(2)}%`, w: 66, align: 'right' },
+              { label: `SGST ${halfPct.toFixed(2)}%`, w: 66, align: 'right' },
+              { label: 'Amount',             w: 72, align: 'right'  },
+              // sum: 20+66+40+24+44+48+44+48+62+62+60+72+66+66+72 = 794
             ]
       : [
           // No-tax layout (13 cols · 794pt). Extra headroom on money
@@ -487,127 +486,30 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
   };
 
   const drawTableHeader = (startY: number): number => {
-    // Interstate: 2-row header (IGST super over % + Amt).
-    // Intra-state: 3-row header — proper Indian invoice hierarchy:
-    //   Row 1: GST (super, spans 4 nested cols)
-    //   Row 2: CGST (spans %+Amt) | SGST (spans %+Amt)
-    //   Row 3: % | Amt | % | Amt
-    // No-tax: single-line header.
-    const headerH = showTaxInTable ? (isInter ? 36 : 44) : 22;
-    // Light grey header band + black text — cleaner corporate look.
+    // Every column — including the tax columns whose rate is baked into
+    // their label ("CGST 1.5%", "IGST 3%") — renders as a normal cell.
+    // The old GST/CGST/SGST super-band hierarchy is gone per operator
+    // spec: no separate "%" sub-column means no need for the nested
+    // rows-of-rows layout.
+    const headerH = 22;
     doc.rect(M, startY, innerW, headerH).fill('#e5e7eb');
     doc.fillColor('#000000').font('Helvetica-Bold').fontSize(9);
-    // Top and bottom borders of the header block.
     doc.strokeColor(gridColor).lineWidth(0.5)
        .moveTo(M, startY).lineTo(M + innerW, startY).stroke()
        .moveTo(M, startY + headerH).lineTo(M + innerW, startY + headerH).stroke();
-    if (showTaxInTable) {
-      // Column index of the first tax column depends on layout:
-      //   Landscape (full breakdown): S+M+A is at 11, tax cols start at 12.
-      //   Portrait  (compact):        S+M+A is at  5, tax cols start at  6.
-      // The GST group spans 4 leaves for intra-state, 2 for interstate.
-      // The Amount column always sits OUTSIDE the group at the end.
-      const taxColsStart = compactMoneyCols ? 6 : 12;
-      const taxColsEnd = compactMoneyCols
-        ? (isInter ? 7 : 9)
-        : (isInter ? 13 : 15);
-      // Non-tax columns fill the full header height and center vertically.
-      // Detect wrap so multi-word labels ("Item & Description", "Gross Wt")
-      // land on two rows at the top instead of one big line at the bottom.
-      const lineH = 11;
-      const singleLineY = startY + (headerH - lineH) / 2;
-      const twoLineY = startY + (headerH - 2 * lineH) / 2;
-      let x = M;
-      for (let i = 0; i < cols.length; i++) {
-        const c = cols[i];
-        if (i >= taxColsStart && i <= taxColsEnd) {
-          x += c.w;
-          continue;
-        }
-        const willWrap = doc.widthOfString(c.label) > c.w - 4;
-        doc.text(c.label, x + 2, willWrap ? twoLineY : singleLineY, {
-          width: c.w - 4,
-          align: 'center',
-        });
-        x += c.w;
-      }
-
-      // Coordinates of the GST group as a whole.
-      const groupX = M + cols.slice(0, taxColsStart).reduce((s, c) => s + c.w, 0);
-      const groupW = cols.slice(taxColsStart, taxColsEnd + 1).reduce((s, c) => s + c.w, 0);
-
-      if (isInter) {
-        // 2-row header — IGST super (top half) + %/Amt leaves (bottom half).
-        const midY = startY + 18;
-        doc.fillColor('#000000').font('Helvetica-Bold').fontSize(11)
-           .text('IGST', groupX, startY + 3, { width: groupW, align: 'center', lineBreak: false });
-        doc.strokeColor('#000000').lineWidth(0.5)
-           .moveTo(groupX, midY).lineTo(groupX + groupW, midY).stroke();
-        // Leaf labels: "%" and "Amt"
-        let lx = groupX;
-        for (let i = taxColsStart; i <= taxColsEnd; i++) {
-          const leaf = cols[i].label.split(' ').pop() ?? '';
-          doc.fillColor('#000000').font('Helvetica-Bold').fontSize(9)
-             .text(leaf, lx + 2, startY + 22, { width: cols[i].w - 4, align: 'center', lineBreak: false });
-          lx += cols[i].w;
-        }
-        // Verticals: top half skips internal splits so IGST spans clean;
-        // bottom half draws every column line to separate % from Amt.
-        drawVerticals(startY, midY, [taxColsStart, taxColsEnd]);
-        drawVerticals(midY, startY + headerH);
-      } else {
-        // 3-row hierarchy — GST → CGST | SGST → % | Amt | % | Amt.
-        const row1H = 13;   // GST super label
-        const row2H = 14;   // CGST | SGST mid labels
-        const midY1 = startY + row1H;
-        const midY2 = midY1 + row2H;
-
-        // Row 1: GST spanning the whole 4-col group.
-        doc.fillColor('#000000').font('Helvetica-Bold').fontSize(11)
-           .text('GST', groupX, startY + 2, { width: groupW, align: 'center', lineBreak: false });
-        doc.strokeColor('#000000').lineWidth(0.5)
-           .moveTo(groupX, midY1).lineTo(groupX + groupW, midY1).stroke();
-
-        // Row 2: CGST (first pair of tax cols: %+Amt) and SGST (second
-        // pair). Indices are taxColsStart..+1 and +2..+3 regardless of
-        // layout — landscape has them at 12/13/14/15, portrait at 6/7/8/9.
-        const cgstX = groupX;
-        const cgstW = cols[taxColsStart].w + cols[taxColsStart + 1].w;
-        const sgstX = cgstX + cgstW;
-        const sgstW = cols[taxColsStart + 2].w + cols[taxColsStart + 3].w;
-        doc.font('Helvetica-Bold').fontSize(10)
-           .text('CGST', cgstX, midY1 + 2, { width: cgstW, align: 'center', lineBreak: false });
-        doc.text('SGST', sgstX, midY1 + 2, { width: sgstW, align: 'center', lineBreak: false });
-        // Divider between CGST and SGST (vertical, only between row2 and bottom)
-        doc.strokeColor('#000000').lineWidth(0.5)
-           .moveTo(sgstX, midY1).lineTo(sgstX, startY + headerH).stroke();
-        // Horizontal divider under CGST/SGST row
-        doc.strokeColor('#000000').lineWidth(0.5)
-           .moveTo(groupX, midY2).lineTo(groupX + groupW, midY2).stroke();
-
-        // Row 3: leaf labels (%, Amt, %, Amt)
-        let lx = groupX;
-        for (let i = taxColsStart; i <= taxColsEnd; i++) {
-          const leaf = cols[i].label.split(' ').pop() ?? '';
-          doc.font('Helvetica-Bold').fontSize(9)
-             .text(leaf, lx + 2, midY2 + 2, { width: cols[i].w - 4, align: 'center', lineBreak: false });
-          lx += cols[i].w;
-        }
-        // Verticals inside the group:
-        //   • Row 1 (GST super): no internal splits — GST spans clean.
-        //   • Row 2 (CGST | SGST): only the CGST↔SGST split, drawn above.
-        //   • Row 3 (leaves): every column line.
-        drawVerticals(startY, midY2, [taxColsStart, taxColsEnd]);
-        drawVerticals(midY2, startY + headerH);
-      }
-    } else {
-      let x = M;
-      for (const c of cols) {
-        doc.text(c.label, x + 2, startY + 6, { width: c.w - 4, align: 'center' });
-        x += c.w;
-      }
-      drawVerticals(startY, startY + headerH);
+    const lineH = 11;
+    const singleLineY = startY + (headerH - lineH) / 2;
+    const twoLineY    = startY + (headerH - 2 * lineH) / 2;
+    let x = M;
+    for (const c of cols) {
+      const willWrap = doc.widthOfString(c.label) > c.w - 4;
+      doc.text(c.label, x + 2, willWrap ? twoLineY : singleLineY, {
+        width: c.w - 4,
+        align: 'center',
+      });
+      x += c.w;
     }
+    drawVerticals(startY, startY + headerH);
     return startY + headerH;
   };
 
@@ -830,19 +732,18 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
     // Row Amount — plain number (no "Rs." prefix). Only the closing
     // TOTAL row and the bottom totals-box carry the currency prefix.
     const rowAmount = Number(finalAmt).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    // Tax columns show only the amount (rate lives in the header). One
+    // cell for interstate (IGST), two for intra-state (CGST + SGST).
     const row = showTaxInTable
       ? isInter
         ? [
             ...commonCells,
-            { v: `${gstPct.toFixed(1)}%`, align: 'right' as const },
             { v: taxAmt.toFixed(2), align: 'right' as const },
             { v: rowAmount, align: 'right' as const },
           ]
         : [
             ...commonCells,
-            { v: `${halfPct.toFixed(1)}%`, align: 'right' as const },
             { v: halfTax.toFixed(2), align: 'right' as const },
-            { v: `${halfPct.toFixed(1)}%`, align: 'right' as const },
             { v: halfTax.toFixed(2), align: 'right' as const },
             { v: rowAmount, align: 'right' as const },
           ]
@@ -896,11 +797,13 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
       totalsCells[10] = { v: totals.extra > 0 ? inr(totals.extra) : '—', align: 'right' };
       totalsCells[11] = { v: inr(totals.sPlusM), align: 'right' };
       if (showTaxCols) {
+        // After removing the % sub-columns the tax cells sit at index 12
+        // (interstate: IGST Amt) or 12 & 13 (intra-state: CGST + SGST Amt).
         if (isInter) {
-          totalsCells[13] = { v: inr(totals.taxAmt), align: 'right' };
+          totalsCells[12] = { v: inr(totals.taxAmt), align: 'right' };
         } else {
+          totalsCells[12] = { v: inr(totals.halfTax), align: 'right' };
           totalsCells[13] = { v: inr(totals.halfTax), align: 'right' };
-          totalsCells[15] = { v: inr(totals.halfTax), align: 'right' };
         }
       }
     }
