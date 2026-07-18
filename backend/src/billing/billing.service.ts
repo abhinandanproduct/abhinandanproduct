@@ -760,6 +760,35 @@ export class BillingService {
       orderBy: { invoiceDate: 'asc' },
       take: 200,
     });
+
+    // Estimates carry an extra "how much silver has been allocated from the
+    // customer's advance towards this estimate?" tally. Sourced from the
+    // customer_metal_ledger — every DRAW_INTO_INVOICE event with
+    // refType='estimate' AND refId=<invoice.id> counts against this
+    // estimate's requirement. Batched into ONE groupBy query keyed by
+    // refId so we don't fan out N ledger queries.
+    const isEstimateList = q.type === 'QUOTE' || q.type === 'ESTIMATE';
+    const invoiceIds = rows.map((r) => r.id);
+    const allocByEstimate = new Map<number, number>();
+    if (isEstimateList && invoiceIds.length) {
+      const groups = await this.prisma.customerMetalLedger.groupBy({
+        by: ['refId'],
+        where: {
+          eventType: 'DRAW_INTO_INVOICE',
+          refType: 'estimate',
+          refId: { in: invoiceIds },
+        },
+        _sum: { weight: true },
+      });
+      for (const g of groups) {
+        if (g.refId != null) {
+          // Ledger stores draws as NEGATIVE weight (balance −). Flip sign
+          // for the display total so it reads as "grams allocated".
+          allocByEstimate.set(g.refId, Math.abs(Number(g._sum.weight ?? 0)));
+        }
+      }
+    }
+
     // Attach summary totals so the list page can render them without loading
     // full item arrays into the UI. totalWeightG (header override) wins over
     // the derived sum when it's set; otherwise fall back to Σ(qty × wt/pc).
@@ -773,14 +802,23 @@ export class BillingService {
         ? Number(inv.totalWeightG)
         : derivedWt;
       const { items, ...rest } = inv;
-      return {
-        ...rest,
-        summary: {
-          totalPieces,
-          totalWeightG: Math.round(totalWeight * 1000) / 1000,
-          lineCount: items.length,
-        },
+      const summary: any = {
+        totalPieces,
+        totalWeightG: Math.round(totalWeight * 1000) / 1000,
+        lineCount: items.length,
       };
+      if (isEstimateList) {
+        const required = Math.round(totalWeight * 1000) / 1000;
+        const allocated = Math.round((allocByEstimate.get(inv.id) ?? 0) * 1000) / 1000;
+        const status =
+          allocated <= 0 ? 'OPEN'
+          : allocated + 0.0005 >= required ? 'CLOSED'
+          : 'PARTIAL';
+        summary.silverRequiredG = required;
+        summary.silverAllocatedG = allocated;
+        summary.silverStatus = status;
+      }
+      return { ...rest, summary };
     });
   }
 

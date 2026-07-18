@@ -44,6 +44,14 @@ export class CustomerAdvancesController {
     return this.svc.allocate(dto, user.id);
   }
 
+  @Post('allocate-estimate')
+  allocateToEstimate(
+    @Body() dto: { estimateId: number; variantId: number; weight: number; note?: string },
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.svc.allocateToEstimate(dto, user.id);
+  }
+
   @Post('return')
   returnToCustomer(
     @Body() dto: { customerId: number; variantId: number; weight: number; note?: string },

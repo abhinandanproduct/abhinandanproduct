@@ -240,6 +240,10 @@ export const Api = {
       unwrap<{ id: number; ledgerId: number; balanceWeight: number }>(
         api.post('/customer-advances/allocate', body),
       ),
+    allocateToEstimate: (body: { estimateId: number; variantId: number; weight: number; note?: string }) =>
+      unwrap<{ ledgerId: number; balanceWeight: number; allocatedTotal: number }>(
+        api.post('/customer-advances/allocate-estimate', body),
+      ),
     returnToCustomer: (body: { customerId: number; variantId: number; weight: number; note?: string }) =>
       unwrap<{ ledgerId: number; balanceWeight: number }>(
         api.post('/customer-advances/return', body),

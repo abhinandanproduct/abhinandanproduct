@@ -336,6 +336,114 @@ export class CustomerAdvancesService {
     });
   }
 
+  /**
+   * Allocate metal from the customer's advance to a specific ESTIMATE. The
+   * customer's ledger balance drops immediately (DRAW_INTO_INVOICE with
+   * refType='estimate', refId=estimate.id) — meaning "this metal is now
+   * spoken for by this estimate; don't count it as available anymore."
+   *
+   * The listInvoices response aggregates these draws per estimate so the
+   * UI can compute status: OPEN (nothing allocated) → PARTIAL (some, but
+   * less than the estimate's silver requirement) → CLOSED (fully covered).
+   *
+   * When the estimate later becomes a real TAX_INVOICE, the operator
+   * doesn't re-draw — the metal was already deducted here.
+   */
+  async allocateToEstimate(
+    dto: { estimateId: number; variantId: number; weight: number; note?: string },
+    userId?: number,
+  ) {
+    const weight = r3(Number(dto.weight ?? 0));
+    if (weight <= 0) throw new BadRequestException('Allocation weight must be positive.');
+
+    const estimate = await this.prisma.invoice.findUnique({
+      where: { id: dto.estimateId },
+      include: { customer: true, items: { select: { quantity: true, weightG: true } } },
+    });
+    if (!estimate) throw new NotFoundException('Estimate not found.');
+    if (estimate.type !== 'QUOTE' && estimate.type !== 'ESTIMATE') {
+      throw new BadRequestException(
+        `Metal can only be allocated to an Estimate — this document is a ${estimate.type}.`,
+      );
+    }
+    if (!estimate.customerId) {
+      throw new BadRequestException('Estimate has no customer — assign a customer first.');
+    }
+
+    const variant = await this.prisma.materialVariant.findUnique({ where: { id: dto.variantId } });
+    if (!variant) throw new NotFoundException('Material variant not found.');
+    if (!variant.trackByWeight) {
+      throw new BadRequestException(`Variant "${variant.variantName}" is not weight-tracked.`);
+    }
+
+    const balance = await this.prisma.customerMetalBalance.findUnique({
+      where: { customerId_variantId: { customerId: estimate.customerId, variantId: dto.variantId } },
+    });
+    const cur = balance ? Number(balance.balanceWeight) : 0;
+    if (cur < weight) {
+      throw new BadRequestException(
+        `Customer only has ${cur.toFixed(3)} g of ${variant.variantName} on advance — can't allocate ${weight.toFixed(3)} g.`,
+      );
+    }
+
+    // Silver-requirement guard: don't allow over-allocating past what the
+    // estimate needs. Sum totalWeightG override or Σ(qty × weightG).
+    const derivedWt = estimate.items.reduce(
+      (s, it) => s + Number(it.quantity ?? 0) * Number(it.weightG ?? 0),
+      0,
+    );
+    const required = r3(
+      estimate.totalWeightG != null && Number(estimate.totalWeightG) > 0
+        ? Number(estimate.totalWeightG)
+        : derivedWt,
+    );
+    const existingAlloc = await this.prisma.customerMetalLedger.aggregate({
+      where: {
+        eventType: 'DRAW_INTO_INVOICE',
+        refType: 'estimate',
+        refId: dto.estimateId,
+      },
+      _sum: { weight: true },
+    });
+    const alreadyAllocated = Math.abs(Number(existingAlloc._sum.weight ?? 0));
+    if (alreadyAllocated + weight > required + 0.0005) {
+      throw new BadRequestException(
+        `Over-allocating: estimate needs ${required.toFixed(3)} g, ${alreadyAllocated.toFixed(3)} g already allocated, ${weight.toFixed(3)} g would exceed.`,
+      );
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.customerMetalBalance.update({
+        where: { customerId_variantId: { customerId: estimate.customerId!, variantId: dto.variantId } },
+        data: { balanceWeight: { decrement: weight } },
+      });
+      const newBal = r3(Number(updated.balanceWeight));
+      if (newBal < 0) {
+        throw new BadRequestException(
+          `Allocation exceeds balance under concurrent activity (final balance ${newBal.toFixed(3)} g).`,
+        );
+      }
+      const ledger = await tx.customerMetalLedger.create({
+        data: {
+          customerId: estimate.customerId!, variantId: dto.variantId,
+          eventType: 'DRAW_INTO_INVOICE',
+          weight: -weight, balanceAfter: newBal,
+          refType: 'estimate', refId: dto.estimateId,
+          note: dto.note ?? `Allocated to ${estimate.invoiceNumber}`,
+          createdById: userId ?? null,
+        },
+      });
+      await this.audit.log(userId, {
+        action: 'customer-advances.allocate-estimate',
+        targetType: 'Invoice',
+        targetId: dto.estimateId,
+        description: `Allocated ${weight.toFixed(3)} g of ${variant.variantName} to ${estimate.invoiceNumber}`,
+        snapshotAfter: { estimateId: dto.estimateId, variantId: dto.variantId, weight, newBalance: newBal },
+      });
+      return { ledgerId: ledger.id, balanceWeight: newBal, allocatedTotal: r3(alreadyAllocated + weight) };
+    });
+  }
+
   /** Labour given — invoiced to customer (rupees). Standalone record so the
    *  customer-detail summary can roll it up without walking invoices. */
   async recordLabourGiven(
