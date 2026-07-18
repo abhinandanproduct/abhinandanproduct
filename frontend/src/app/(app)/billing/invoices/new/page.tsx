@@ -160,15 +160,16 @@ export default function NewInvoicePage() {
   );
 
   // "Mixed Silver Jewellery" line detection — trigger for the coverage
-  // field. Any line whose itemNumber or description names the special
-  // consolidated silver item counts.
+  // field. Case-insensitive substring match on either the item slot or
+  // the description so typing variants ("Mixed Silver", "mixed silver
+  // jewellery") still triggers.
   const hasMixedSilverLine = React.useMemo(() =>
-    lines.some((l) =>
-      l.itemNumber === 'Mixed Silver Jewellery' ||
-      /mixed\s+silver/i.test(l.description ?? '')
-    ),
+    lines.some((l) => /mixed\s+silver/i.test(`${l.itemNumber ?? ''} ${l.description ?? ''}`)),
   [lines]);
-  const showCoverageField = type === 'TAX_INVOICE' && !!customerId && hasMixedSilverLine;
+  // Field is visible whenever the type + line qualify — but the picker
+  // button is disabled until a customer is picked so the operator sees
+  // the section exists and why it's not clickable yet.
+  const showCoverageField = type === 'TAX_INVOICE' && hasMixedSilverLine;
   const coverageTotals = React.useMemo(() => {
     const entries = Object.entries(coverages)
       .filter(([, v]) => Number(v) > 0)
@@ -655,12 +656,15 @@ export default function NewInvoicePage() {
           </Field>
           {showCoverageField && (
             <Field label="Estimates covered"
-              hint="Which estimates does this invoice's silver settle. Opens a picker with the customer's OPEN/PARTIAL estimates.">
+              hint={customerId
+                ? "Which estimates does this invoice's silver settle. Opens a picker with the customer's OPEN/PARTIAL estimates."
+                : 'Pick a customer above to enable this picker.'}>
               <Button
                 type="button"
                 variant="outline"
                 className="h-9 justify-start"
                 onClick={() => setCoverageOpen(true)}
+                disabled={!customerId}
               >
                 {coverageTotals.count === 0
                   ? 'Select estimates…'
