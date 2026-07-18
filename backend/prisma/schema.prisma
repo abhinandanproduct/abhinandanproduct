@@ -1863,6 +1863,11 @@ model Invoice {
   tempInvoices    Invoice[]           @relation("EstimateToTemp")
   allocations     PaymentAllocation[]
   silverLotDraws  SilverLotDraw[]
+  // Metal-invoice ↔ estimate coverage. Only TAX_INVOICE records populate
+  // coverages; a QUOTE/ESTIMATE row instead appears via coveredBy — the
+  // list of TAX_INVOICE rows that consumed grams against it.
+  coverages       InvoiceEstimateCoverage[] @relation("MetalInvoiceCoverages")
+  coveredBy       InvoiceEstimateCoverage[] @relation("EstimateCoveredBy")
   createdBy       User?               @relation("InvoiceCreator", fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([customerId])
@@ -1870,6 +1875,30 @@ model Invoice {
   @@index([type, status])
   @@index([sourceEstimateId])
   @@map("invoices")
+}
+
+// Metal-invoice → estimate coverage: when a TAX_INVOICE (ABN-XXXXXX) is
+// raised for silver received from a customer, one row per estimate that
+// invoice's grams cover. The estimate's silver-status is derived from
+// Σ silverAllocatedG over its `coveredBy` rows:
+//   sum ≥ requiredG           → CLOSED
+//   0 < sum < required        → PARTIAL
+//   sum == 0                  → OPEN
+// Cascade-delete on invoice removal so canceling an ABN unwinds every
+// estimate it was covering — those estimates re-open.
+model InvoiceEstimateCoverage {
+  id                Int      @id @default(autoincrement())
+  invoiceId         Int      @map("invoice_id")     // the TAX_INVOICE
+  estimateId        Int      @map("estimate_id")    // the QUOTE / ESTIMATE
+  silverAllocatedG  Decimal  @map("silver_allocated_g") @db.Decimal(12, 3)
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  invoice   Invoice @relation("MetalInvoiceCoverages", fields: [invoiceId], references: [id], onDelete: Cascade)
+  estimate  Invoice @relation("EstimateCoveredBy",     fields: [estimateId], references: [id], onDelete: Restrict)
+
+  @@unique([invoiceId, estimateId])
+  @@index([estimateId])
+  @@map("invoice_estimate_coverages")
 }
 
 model InvoiceItem {

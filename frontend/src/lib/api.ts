@@ -587,6 +587,19 @@ export const Api = {
     // as a regular invoice; the TEMP marker lives on the record type.
     generateTempInvoice: (estimateId: number) =>
       unwrap<any>(api.post(`/invoices/${estimateId}/temp-invoice`, {})),
+    // Raise a single ABN-XXXXXX tax invoice for silver received against
+    // multiple estimates. Backend allocates per-estimate grams, one
+    // consolidated silver line on the invoice.
+    raiseMetalInvoice: (body: {
+      customerId: number;
+      invoiceDate: string;
+      silverRatePerG: number;
+      coverages: { estimateId: number; silverAllocatedG: number }[];
+      notes?: string;
+      dueDate?: string;
+      gstPercent?: number;
+      isInterState?: boolean;
+    }) => unwrap<any>(api.post('/metal-invoice', body)),
     invoicePdfUrl: (id: number) =>
       `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/invoices/${id}/pdf`,
 

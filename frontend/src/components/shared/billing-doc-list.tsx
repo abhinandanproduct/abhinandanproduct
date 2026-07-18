@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Search, Ban, Printer, Trash2, FileText } from 'lucide-react';
+import { Plus, Search, Ban, Printer, Trash2, FileText, Scale } from 'lucide-react';
 import { toast } from 'sonner';
 import { Api, getApiError } from '@/lib/api';
 import { useFiscalYear } from '@/lib/fiscal-year';
@@ -12,6 +12,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
+import { Dialog } from '@/components/ui/dialog';
+import { Field } from '@/components/shared/field';
 import { SortableTh, useTableSort } from './sortable-table';
 
 const STATUS_BADGE: Record<string, string> = {
@@ -20,6 +22,13 @@ const STATUS_BADGE: Record<string, string> = {
   PAID:      'bg-success/15 text-success',
   CANCELLED: 'bg-destructive/15 text-destructive',
   INVOICED:  'bg-warning/15 text-warning',
+};
+
+// Silver-side status for estimates, derived from covered-by-invoice grams.
+const SILVER_BADGE: Record<string, string> = {
+  OPEN:    'bg-warning/15 text-warning',
+  PARTIAL: 'bg-info/15 text-info',
+  CLOSED:  'bg-success/15 text-success',
 };
 
 /**
@@ -87,6 +96,10 @@ export function BillingDocList({
   const showTempAction = type === 'QUOTE' || type === 'ESTIMATE';
   const isEstimate     = type === 'QUOTE' || type === 'ESTIMATE';
 
+  // Metal-invoice dialog — opens with a customer selected + their
+  // OPEN/PARTIAL estimates listed with grams inputs.
+  const [metalOpen, setMetalOpen] = React.useState(false);
+
   // Sort by the invoice date ascending by default (matches the ordering the
   // backend now returns; clickable headers let the operator flip any column).
   const { sorted, sortKey, sortDir, toggle } = useTableSort<any>(
@@ -98,9 +111,11 @@ export function BillingDocList({
       // so "1,97,871.00" doesn't sort lexicographically before "60,386.00".
       totalAmount: (r) => Number(r.totalAmount),
       balanceAmount: (r) => Number(r.balanceAmount),
-      // Estimate-only silver column lands in summary — surface it for sorting
-      // on the estimate list. Non-estimate rows just get 0.
-      silverRequiredG: (r) => Number(r.summary?.silverRequiredG ?? 0),
+      // Estimate-only silver columns lands in summary — surface them for
+      // sorting on the estimate list.
+      silverRequiredG:  (r) => Number(r.summary?.silverRequiredG ?? 0),
+      silverAllocatedG: (r) => Number(r.summary?.silverAllocatedG ?? 0),
+      silverStatus:     (r) => r.summary?.silverStatus ?? '',
     },
   );
 
@@ -110,9 +125,16 @@ export function BillingDocList({
         title={title}
         description={description}
         actions={
-          <Link href={newHref ?? `/billing/invoices/new?type=${type}`}>
-            <Button><Plus className="size-4" /> New</Button>
-          </Link>
+          <div className="flex gap-2">
+            {isEstimate && (
+              <Button variant="outline" onClick={() => setMetalOpen(true)}>
+                <Scale className="size-4" /> Metal Invoice
+              </Button>
+            )}
+            <Link href={newHref ?? `/billing/invoices/new?type=${type}`}>
+              <Button><Plus className="size-4" /> New</Button>
+            </Link>
+          </div>
         }
       />
 
@@ -137,7 +159,11 @@ export function BillingDocList({
                   <SortableTh label="Customer" sortKey="billToName"     currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
                   <SortableTh label="Status"   sortKey="status"         currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
                   {isEstimate && (
-                    <SortableTh label="Silver Req.g" sortKey="silverRequiredG"  currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" />
+                    <>
+                      <SortableTh label="Silver Req.g" sortKey="silverRequiredG"  currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" />
+                      <SortableTh label="Alloc.g"      sortKey="silverAllocatedG" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" />
+                      <SortableTh label="Silver"       sortKey="silverStatus"     currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                    </>
                   )}
                   <SortableTh label="Total"    sortKey="totalAmount"    currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" />
                   <SortableTh label="Balance"  sortKey="balanceAmount"  currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" />
@@ -166,9 +192,19 @@ export function BillingDocList({
                       </span>
                     </td>
                     {isEstimate && (
-                      <td className="px-4 py-2 text-right tabular-nums text-xs">
-                        {Number(inv.summary?.silverRequiredG ?? 0).toFixed(3)}
-                      </td>
+                      <>
+                        <td className="px-4 py-2 text-right tabular-nums text-xs">
+                          {Number(inv.summary?.silverRequiredG ?? 0).toFixed(3)}
+                        </td>
+                        <td className="px-4 py-2 text-right tabular-nums text-xs">
+                          {Number(inv.summary?.silverAllocatedG ?? 0).toFixed(3)}
+                        </td>
+                        <td className="px-4 py-2">
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${SILVER_BADGE[inv.summary?.silverStatus ?? 'OPEN']}`}>
+                            {inv.summary?.silverStatus ?? 'OPEN'}
+                          </span>
+                        </td>
+                      </>
                     )}
                     <td className="px-4 py-2 text-right font-medium tabular-nums">
                       ₹ {Number(inv.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
@@ -217,7 +253,7 @@ export function BillingDocList({
                   </tr>
                 ))}
                 {sorted.length === 0 && (
-                  <tr><td colSpan={isEstimate ? 8 : 7} className="px-4 py-12 text-center text-muted-foreground">Nothing here yet.</td></tr>
+                  <tr><td colSpan={isEstimate ? 10 : 7} className="px-4 py-12 text-center text-muted-foreground">Nothing here yet.</td></tr>
                 )}
               </tbody>
             </table>
@@ -225,6 +261,204 @@ export function BillingDocList({
           )}
         </CardContent>
       </Card>
+
+      {isEstimate && (
+        <MetalInvoiceDialog
+          open={metalOpen}
+          estimates={(q.data ?? []).filter((e) => e.status !== 'CANCELLED' && (e.summary?.silverStatus ?? 'OPEN') !== 'CLOSED')}
+          onClose={() => setMetalOpen(false)}
+          onSaved={() => {
+            setMetalOpen(false);
+            qc.invalidateQueries({ queryKey: ['invoices'] });
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * Raise an ABN-XXXXXX tax invoice for silver received against multiple
+ * estimates. Operator picks a customer (via the estimates that show up in
+ * the picker), sets grams per estimate, sets silver rate + optional GST/
+ * inter-state flag, saves. Backend validates:
+ *   - Every estimate belongs to the same customer.
+ *   - Grams per estimate ≤ that estimate's remaining silver need.
+ *   - At least one gram in total.
+ */
+function MetalInvoiceDialog({
+  open, estimates, onClose, onSaved,
+}: {
+  open: boolean;
+  estimates: any[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  // Group open estimates by customer so the operator picks a customer and
+  // then sees only that customer's rows. Prevents accidental cross-customer
+  // allocation.
+  const byCustomer = React.useMemo(() => {
+    const m = new Map<number, { name: string; rows: any[] }>();
+    for (const e of estimates) {
+      if (!e.customerId) continue;
+      const cur: { name: string; rows: any[] } = m.get(e.customerId) ?? { name: e.billToName ?? '?', rows: [] };
+      cur.rows.push(e);
+      m.set(e.customerId, cur);
+    }
+    return m;
+  }, [estimates]);
+  const [customerId, setCustomerId] = React.useState<number | ''>('');
+  const [invoiceDate, setInvoiceDate] = React.useState(() => new Date().toISOString().slice(0, 10));
+  const [rate, setRate] = React.useState('');
+  const [gstPct, setGstPct] = React.useState('0');
+  const [interState, setInterState] = React.useState(false);
+  const [rows, setRows] = React.useState<Record<number, string>>({}); // estimateId → grams str
+  const [notes, setNotes] = React.useState('');
+
+  React.useEffect(() => {
+    if (!open) {
+      setCustomerId(''); setInvoiceDate(new Date().toISOString().slice(0, 10));
+      setRate(''); setGstPct('0'); setInterState(false); setRows({}); setNotes('');
+    }
+  }, [open]);
+
+  React.useEffect(() => {
+    // Reset per-estimate grams when the customer changes.
+    setRows({});
+  }, [customerId]);
+
+  const shown = customerId ? (byCustomer.get(customerId as number)?.rows ?? []) : [];
+  const totalGrams = shown.reduce((s, e) => s + (Number(rows[e.id] || 0) || 0), 0);
+
+  const save = useMutation({
+    mutationFn: () => Api.billing.raiseMetalInvoice({
+      customerId: Number(customerId),
+      invoiceDate,
+      silverRatePerG: Number(rate),
+      coverages: shown
+        .filter((e) => Number(rows[e.id] || 0) > 0)
+        .map((e) => ({ estimateId: e.id, silverAllocatedG: Number(rows[e.id]) })),
+      notes: notes || undefined,
+      gstPercent: Number(gstPct) || 0,
+      isInterState: interState,
+    }),
+    onSuccess: (inv) => {
+      toast.success(`${inv.invoiceNumber} raised for ${Number(totalGrams).toFixed(3)} g.`);
+      onSaved();
+    },
+    onError: (e) => toast.error(getApiError(e).message),
+  });
+
+  const canSubmit =
+    !!customerId && !!invoiceDate && Number(rate) > 0 && totalGrams > 0 && !save.isPending;
+
+  if (!open) return null;
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      size="lg"
+      title="Raise Metal Invoice (ABN-)"
+      description="Select which estimates the silver received covers. Backend validates against each estimate's remaining requirement."
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={save.isPending}>Cancel</Button>
+          <Button onClick={() => save.mutate()} disabled={!canSubmit}>
+            {save.isPending && <Spinner />} Create ABN
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="Customer" required>
+            <select
+              className="h-10 w-full rounded-md border border-border bg-secondary/20 px-3 text-sm"
+              value={customerId}
+              onChange={(e) => setCustomerId(e.target.value ? Number(e.target.value) : '')}
+            >
+              <option value="">— Pick a customer with open estimates —</option>
+              {Array.from(byCustomer.entries()).map(([id, { name, rows }]) => (
+                <option key={id} value={id}>{name} ({rows.length} open)</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Invoice date" required>
+            <Input type="date" value={invoiceDate} onChange={(e) => setInvoiceDate(e.target.value)} />
+          </Field>
+          <Field label="Silver rate ₹/g" required>
+            <Input type="number" step="0.01" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="e.g. 95.50" />
+          </Field>
+          <Field label="GST %">
+            <Input type="number" step="0.01" value={gstPct} onChange={(e) => setGstPct(e.target.value)} />
+          </Field>
+        </div>
+
+        <label className="flex items-center gap-2 text-xs">
+          <input type="checkbox" checked={interState} onChange={(e) => setInterState(e.target.checked)} />
+          Inter-state (IGST instead of CGST+SGST)
+        </label>
+
+        {customerId && shown.length === 0 && (
+          <div className="rounded border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+            This customer has no OPEN/PARTIAL estimates in the current filter.
+          </div>
+        )}
+
+        {customerId && shown.length > 0 && (
+          <div className="table-scroll">
+            <table className="w-full text-sm">
+              <thead className="bg-secondary/30 text-left text-xs text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2">Estimate</th>
+                  <th className="px-3 py-2 text-right">Required g</th>
+                  <th className="px-3 py-2 text-right">Already alloc.</th>
+                  <th className="px-3 py-2 text-right">Remaining</th>
+                  <th className="px-3 py-2 text-right">Cover g</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((e) => {
+                  const req = Number(e.summary?.silverRequiredG ?? 0);
+                  const alloc = Number(e.summary?.silverAllocatedG ?? 0);
+                  const remain = Math.max(0, req - alloc);
+                  const cur = Number(rows[e.id] || 0);
+                  const over = cur > remain + 0.0005;
+                  return (
+                    <tr key={e.id} className="border-t border-border">
+                      <td className="px-3 py-2 font-semibold">{e.invoiceNumber}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-xs">{req.toFixed(3)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-xs">{alloc.toFixed(3)}</td>
+                      <td className="px-3 py-2 text-right tabular-nums text-xs text-warning">{remain.toFixed(3)}</td>
+                      <td className="px-3 py-2 text-right">
+                        <Input
+                          type="number" step="0.001" min="0" max={remain}
+                          value={rows[e.id] ?? ''}
+                          onChange={(ev) => setRows((r) => ({ ...r, [e.id]: ev.target.value }))}
+                          placeholder="0.000"
+                          className={`h-8 w-24 text-right ${over ? 'border-destructive' : ''}`}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr className="border-t border-border bg-secondary/30 font-semibold">
+                  <td colSpan={4} className="px-3 py-2 text-right">Total to cover</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{totalGrams.toFixed(3)} g</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+
+        <Field label="Notes">
+          <Input value={notes} onChange={(e) => setNotes(e.target.value)}
+            placeholder="Optional: e.g. 1 kg bar received against ests #3/#4/#5" />
+        </Field>
+      </div>
+    </Dialog>
   );
 }

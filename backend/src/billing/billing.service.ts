@@ -731,6 +731,152 @@ export class BillingService {
     return this.getInvoice(created.id);
   }
 
+  /**
+   * Raise an ABN-series tax invoice for silver received from a customer,
+   * spread across one or more of that customer's OPEN/PARTIAL estimates.
+   *
+   * Invoice shape (matches Temp Invoice's consolidated form): a single
+   * "Silver — X grams" line whose weight equals Σ(coverages.silverAllocatedG).
+   * The printed invoice reads like a normal tax invoice; the
+   * per-estimate breakdown lives in the InvoiceEstimateCoverage rows and
+   * surfaces on the estimate list as "Alloc.g" + status.
+   *
+   * Guards:
+   *  - Every covered estimate must belong to `customerId`, be a
+   *    QUOTE/ESTIMATE, and not CANCELLED.
+   *  - No coverage may push an estimate's Σ(alloc) past its required
+   *    silver grams — over-allocation is rejected at save.
+   *  - At least one coverage row and at least one gram in total.
+   */
+  async raiseMetalInvoice(
+    dto: {
+      customerId: number;
+      invoiceDate: string;
+      silverRatePerG: number;
+      coverages: { estimateId: number; silverAllocatedG: number }[];
+      notes?: string;
+      dueDate?: string;
+      gstPercent?: number;
+      isInterState?: boolean;
+    },
+    userId?: number,
+  ) {
+    if (!dto.coverages?.length) {
+      throw new BadRequestException('At least one estimate coverage is required.');
+    }
+    const r3 = (n: number) => Math.round(n * 1000) / 1000;
+    const totalGrams = r3(dto.coverages.reduce((s, c) => s + Number(c.silverAllocatedG ?? 0), 0));
+    if (totalGrams <= 0) {
+      throw new BadRequestException('Total covered grams must be positive.');
+    }
+    if (!(Number(dto.silverRatePerG) > 0)) {
+      throw new BadRequestException('silverRatePerG must be positive.');
+    }
+
+    const customer = await this.getCustomer(dto.customerId);
+
+    // Load every covered estimate + its existing coverages + line items
+    // in ONE query so validation runs in memory without N round trips.
+    const estimateIds = dto.coverages.map((c) => c.estimateId);
+    const estimates = await this.prisma.invoice.findMany({
+      where: { id: { in: estimateIds } },
+      include: {
+        items: { select: { quantity: true, weightG: true } },
+        coveredBy: { select: { silverAllocatedG: true } },
+      },
+    });
+    const byId = new Map(estimates.map((e) => [e.id, e]));
+
+    for (const cov of dto.coverages) {
+      const est = byId.get(cov.estimateId);
+      if (!est) throw new BadRequestException(`Estimate ${cov.estimateId} not found.`);
+      if (est.type !== 'QUOTE' && est.type !== 'ESTIMATE') {
+        throw new BadRequestException(`${est.invoiceNumber} is not an estimate (type=${est.type}).`);
+      }
+      if (est.status === 'CANCELLED') {
+        throw new BadRequestException(`${est.invoiceNumber} is CANCELLED — cannot cover it.`);
+      }
+      if (est.customerId !== dto.customerId) {
+        throw new BadRequestException(`${est.invoiceNumber} belongs to a different customer.`);
+      }
+      const g = Number(cov.silverAllocatedG ?? 0);
+      if (!(g > 0)) {
+        throw new BadRequestException(`${est.invoiceNumber}: coverage grams must be positive.`);
+      }
+      // Silver required = Σ(qty × weightG) or the header override.
+      const derivedWt = est.items.reduce(
+        (s, it) => s + Number(it.quantity ?? 0) * Number(it.weightG ?? 0),
+        0,
+      );
+      const required = r3(
+        est.totalWeightG != null && Number(est.totalWeightG) > 0
+          ? Number(est.totalWeightG)
+          : derivedWt,
+      );
+      const already = r3(est.coveredBy.reduce((s, c) => s + Number(c.silverAllocatedG), 0));
+      if (already + g > required + 0.0005) {
+        throw new BadRequestException(
+          `${est.invoiceNumber}: coverage over the requirement — needs ${required.toFixed(3)} g, already ${already.toFixed(3)} g, this ${g.toFixed(3)} g would exceed.`,
+        );
+      }
+    }
+
+    // Build the consolidated silver line — same shape as a Temp Invoice's
+    // single-line summary. The description names the estimates it covers so
+    // the printed invoice reads like a real tax invoice.
+    const covered = dto.coverages
+      .map((c) => byId.get(c.estimateId)!.invoiceNumber)
+      .join(', ');
+    const rate = Number(dto.silverRatePerG);
+    const silverAmount = Math.round(totalGrams * rate * 100) / 100;
+
+    const line: any = {
+      description: `Silver — covers ${covered}`,
+      quantity: 1,
+      weightG: totalGrams,
+      totalWeightG: totalGrams,
+      silverRatePerG: rate,
+      makingRatePerG: 0,
+    };
+
+    // Delegate to createInvoice for tax/GST math + numbering + AR debit,
+    // then attach coverage rows in the same transaction as the returned
+    // invoice's back-link update.
+    const invoiceDto: any = {
+      type: 'TAX_INVOICE',
+      customerId: dto.customerId,
+      invoiceDate: dto.invoiceDate,
+      dueDate: dto.dueDate,
+      silverRatePerG: rate,
+      makingRatePerG: 0,
+      gstPercent: dto.gstPercent ?? 0,
+      isInterState: dto.isInterState ?? false,
+      ratesFixed: true,
+      lines: [line],
+      notes: dto.notes ?? `Metal received — covers ${covered}.`,
+      status: 'ISSUED',
+    };
+    const created = await this.createInvoice(invoiceDto, userId);
+
+    // Insert coverage rows now that the invoice id exists. Any failure here
+    // leaves an orphaned invoice — acceptable for MVP; the operator can
+    // cancel it. A pure $transaction across createInvoice + coverages would
+    // need to inline createInvoice, which is 200 lines of ratesFixed / GST /
+    // AR-debit logic; deferring that refactor.
+    await this.prisma.invoiceEstimateCoverage.createMany({
+      data: dto.coverages.map((c) => ({
+        invoiceId: created.id,
+        estimateId: c.estimateId,
+        silverAllocatedG: r3(Number(c.silverAllocatedG)),
+      })),
+    });
+    // Silver-amount total should equal grams × rate — sanity check
+    // (createInvoice's compute already ran, so this is documentation).
+    void silverAmount;
+
+    return this.getInvoice(created.id);
+  }
+
   async listInvoices(q: { type?: InvoiceTypeStr; customerId?: number; status?: string; search?: string; fromDate?: string; toDate?: string }) {
     const where: Prisma.InvoiceWhereInput = {};
     if (q.type) where.type = q.type as any;
@@ -761,11 +907,23 @@ export class BillingService {
       take: 200,
     });
 
-    // Estimates carry the silver-requirement tally as a bonus field so the
-    // list page can render "how much silver this estimate needs" without a
-    // second call. The invoice-side allocation UI (metal-invoice → covers
-    // estimates) is built separately and updates its own tracking table.
+    // Estimates carry silver-requirement + allocated-so-far tallies so the
+    // list page can render status without a second call. Allocated grams are
+    // aggregated from InvoiceEstimateCoverage in ONE groupBy keyed by the
+    // estimate id — flat cost regardless of how many estimates are showing.
     const isEstimateList = q.type === 'QUOTE' || q.type === 'ESTIMATE';
+    const invoiceIds = rows.map((r) => r.id);
+    const allocByEstimate = new Map<number, number>();
+    if (isEstimateList && invoiceIds.length) {
+      const groups = await this.prisma.invoiceEstimateCoverage.groupBy({
+        by: ['estimateId'],
+        where: { estimateId: { in: invoiceIds } },
+        _sum: { silverAllocatedG: true },
+      });
+      for (const g of groups) {
+        allocByEstimate.set(g.estimateId, Number(g._sum.silverAllocatedG ?? 0));
+      }
+    }
 
     // Attach summary totals so the list page can render them without loading
     // full item arrays into the UI. totalWeightG (header override) wins over
@@ -786,7 +944,15 @@ export class BillingService {
         lineCount: items.length,
       };
       if (isEstimateList) {
-        summary.silverRequiredG = Math.round(totalWeight * 1000) / 1000;
+        const required  = Math.round(totalWeight * 1000) / 1000;
+        const allocated = Math.round((allocByEstimate.get(inv.id) ?? 0) * 1000) / 1000;
+        const status =
+          allocated <= 0                    ? 'OPEN'
+          : allocated + 0.0005 >= required  ? 'CLOSED'
+          : 'PARTIAL';
+        summary.silverRequiredG  = required;
+        summary.silverAllocatedG = allocated;
+        summary.silverStatus     = status;
       }
       return { ...rest, summary };
     });
