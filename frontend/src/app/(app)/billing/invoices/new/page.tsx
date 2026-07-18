@@ -521,7 +521,7 @@ export default function NewInvoicePage() {
         ? Api.billing.updateInvoice(editId, body)
         : Api.billing.createInvoice(body);
     },
-    onSuccess: (inv: any) => {
+    onSuccess: async (inv: any) => {
       toast.success(`${inv.invoiceNumber} ${isEdit ? 'updated' : 'created'}.`);
       // The edit form seeds ONCE from the first editQ.data value and
       // guards re-seeds behind a ref. TanStack returns stale cache on
@@ -530,12 +530,19 @@ export default function NewInvoicePage() {
       // the user manually refreshes. removeQueries() nukes the cache
       // so the next Edit click has to fetch fresh before the seed runs.
       qcc.removeQueries({ queryKey: ['invoice-edit', inv.id] });
-      qcc.invalidateQueries({ queryKey: ['invoices'] });
-      qcc.invalidateQueries({ queryKey: ['temp-invoices'] });
-      qcc.invalidateQueries({ queryKey: ['invoice', inv.id] });
-      qcc.invalidateQueries({ queryKey: ['customer-ledger', inv.customerId] });
-      qcc.invalidateQueries({ queryKey: ['customer-advances-ledger'] });
-      qcc.invalidateQueries({ queryKey: ['customer-advances-summary'] });
+      // refetchType: 'all' forces every matching query (including inactive
+      // ones — the estimates list page the user just left) to refetch
+      // immediately, so navigating back to it shows the updated
+      // Alloc.g + Silver status without a hard reload.
+      await Promise.all([
+        qcc.invalidateQueries({ queryKey: ['invoices'],           refetchType: 'all' }),
+        qcc.invalidateQueries({ queryKey: ['temp-invoices'],      refetchType: 'all' }),
+        qcc.invalidateQueries({ queryKey: ['invoice', inv.id],    refetchType: 'all' }),
+        qcc.invalidateQueries({ queryKey: ['open-estimates'],     refetchType: 'all' }),
+        qcc.invalidateQueries({ queryKey: ['customer-ledger', inv.customerId], refetchType: 'all' }),
+        qcc.invalidateQueries({ queryKey: ['customer-advances-ledger'],  refetchType: 'all' }),
+        qcc.invalidateQueries({ queryKey: ['customer-advances-summary'], refetchType: 'all' }),
+      ]);
       router.push(`/billing/invoices/${inv.id}`);
     },
     onError: (e) => toast.error(getApiError(e).message),
