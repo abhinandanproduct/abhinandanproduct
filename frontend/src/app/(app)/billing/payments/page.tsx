@@ -13,6 +13,7 @@ import { Dialog } from '@/components/ui/dialog';
 import { Field } from '@/components/shared/field';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Spinner } from '@/components/ui/spinner';
+import { SortableTh, useTableSort } from '@/components/shared/sortable-table';
 
 export default function PaymentsPage() {
   const qc = useQueryClient();
@@ -38,6 +39,16 @@ export default function PaymentsPage() {
         : Promise.resolve([]),
     enabled: !!form.customerId,
   });
+
+  const { sorted, sortKey, sortDir, toggle } = useTableSort<any>(
+    q.data,
+    'paymentDate',
+    'desc',
+    {
+      amount: (r) => Number(r.amount),
+      customer: (r) => r.customer?.customerName ?? '',
+    },
+  );
 
   const create = useMutation({
     mutationFn: () =>
@@ -86,16 +97,16 @@ export default function PaymentsPage() {
             <table className="w-full text-sm">
               <thead className="bg-secondary/30 text-left text-xs text-muted-foreground">
                 <tr>
-                  <th className="px-4 py-2">Receipt</th>
-                  <th className="px-4 py-2">Date</th>
-                  <th className="px-4 py-2">Customer</th>
-                  <th className="px-4 py-2">Mode</th>
-                  <th className="px-4 py-2">Reference</th>
-                  <th className="px-4 py-2 text-right">Amount</th>
+                  <SortableTh label="Receipt" sortKey="paymentNumber" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Date" sortKey="paymentDate" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Customer" sortKey="customer" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Mode" sortKey="mode" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Reference" sortKey="reference" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Amount" sortKey="amount" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" />
                 </tr>
               </thead>
               <tbody>
-                {(q.data ?? []).map((p) => (
+                {sorted.map((p) => (
                   <tr key={p.id} className="border-t border-border">
                     <td className="px-4 py-2 font-semibold">{p.paymentNumber}</td>
                     <td className="px-4 py-2 text-xs">{new Date(p.paymentDate).toLocaleDateString('en-IN')}</td>

@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Spinner } from '@/components/ui/spinner';
 import { Field } from '@/components/shared/field';
 import { Button } from '@/components/ui/button';
+import { SortableTh, useTableSort } from '@/components/shared/sortable-table';
 
 // Vendor Drift Accumulator — surfaces "vendor said X grams, we actually got
 // Y" per vendor across every receipt-item that recorded a claim. Fleet-wide
@@ -40,6 +41,28 @@ export default function VendorDriftPage() {
 
   const rollup = rollupQ.data;
   const detail = detailQ.data;
+
+  const rollupSort = useTableSort<any>(
+    rollup?.vendors,
+    'totalDrift',
+    'desc', // biggest drift first (matches the section header hint)
+    {
+      totalClaimed:  (v) => Number(v.totalClaimed),
+      totalReceived: (v) => Number(v.totalReceived),
+      totalDrift:    (v) => Math.abs(Number(v.totalDrift)), // magnitude, so ±6g > ±2g
+      receiptCount:  (v) => Number(v.receiptCount),
+    },
+  );
+  const detailSort = useTableSort<any>(
+    detail?.detail,
+    'receiptDate',
+    'desc',
+    {
+      claimedG: (r) => Number(r.claimedG),
+      actualG:  (r) => Number(r.actualG),
+      driftG:   (r) => Number(r.driftG),
+    },
+  );
 
   const fmt = (n: number) => n.toFixed(3);
   const driftClass = (d: number) =>
@@ -88,16 +111,16 @@ export default function VendorDriftPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border bg-secondary/30 text-[11px] uppercase tracking-wider text-text-muted">
-                    <th className="px-3 py-1.5 text-left font-medium">Vendor</th>
-                    <th className="px-3 py-1.5 text-right font-medium">Claimed g</th>
-                    <th className="px-3 py-1.5 text-right font-medium">Actual g</th>
-                    <th className="px-3 py-1.5 text-right font-medium">Drift g</th>
-                    <th className="px-3 py-1.5 text-right font-medium">Rcpts</th>
+                    <SortableTh label="Vendor"    sortKey="vendorName"    currentKey={rollupSort.sortKey} currentDir={rollupSort.sortDir} onToggle={rollupSort.toggle} />
+                    <SortableTh label="Claimed g" sortKey="totalClaimed"  currentKey={rollupSort.sortKey} currentDir={rollupSort.sortDir} onToggle={rollupSort.toggle} align="right" />
+                    <SortableTh label="Actual g"  sortKey="totalReceived" currentKey={rollupSort.sortKey} currentDir={rollupSort.sortDir} onToggle={rollupSort.toggle} align="right" />
+                    <SortableTh label="Drift g"   sortKey="totalDrift"    currentKey={rollupSort.sortKey} currentDir={rollupSort.sortDir} onToggle={rollupSort.toggle} align="right" />
+                    <SortableTh label="Rcpts"     sortKey="receiptCount"  currentKey={rollupSort.sortKey} currentDir={rollupSort.sortDir} onToggle={rollupSort.toggle} align="right" />
                     <th className="w-8" />
                   </tr>
                 </thead>
                 <tbody>
-                  {rollup.vendors.map((v) => {
+                  {rollupSort.sorted.map((v) => {
                     const selected = v.vendorId === selectedVendorId;
                     return (
                       <tr
@@ -155,17 +178,17 @@ export default function VendorDriftPage() {
                 <table className="w-full text-sm">
                   <thead className="sticky top-0 bg-secondary/60 backdrop-blur">
                     <tr className="border-b border-border text-[11px] uppercase tracking-wider text-text-muted">
-                      <th className="px-3 py-1.5 text-left font-medium">Date</th>
-                      <th className="px-3 py-1.5 text-left font-medium">Receipt</th>
-                      <th className="px-3 py-1.5 text-left font-medium">Design</th>
-                      <th className="px-3 py-1.5 text-left font-medium">Stage</th>
-                      <th className="px-3 py-1.5 text-right font-medium">Claimed g</th>
-                      <th className="px-3 py-1.5 text-right font-medium">Actual g</th>
-                      <th className="px-3 py-1.5 text-right font-medium">Drift g</th>
+                      <SortableTh label="Date"      sortKey="receiptDate"   currentKey={detailSort.sortKey} currentDir={detailSort.sortDir} onToggle={detailSort.toggle} />
+                      <SortableTh label="Receipt"   sortKey="receiptNumber" currentKey={detailSort.sortKey} currentDir={detailSort.sortDir} onToggle={detailSort.toggle} />
+                      <SortableTh label="Design"    sortKey="designCode"    currentKey={detailSort.sortKey} currentDir={detailSort.sortDir} onToggle={detailSort.toggle} />
+                      <SortableTh label="Stage"     sortKey="stage"         currentKey={detailSort.sortKey} currentDir={detailSort.sortDir} onToggle={detailSort.toggle} />
+                      <SortableTh label="Claimed g" sortKey="claimedG"      currentKey={detailSort.sortKey} currentDir={detailSort.sortDir} onToggle={detailSort.toggle} align="right" />
+                      <SortableTh label="Actual g"  sortKey="actualG"       currentKey={detailSort.sortKey} currentDir={detailSort.sortDir} onToggle={detailSort.toggle} align="right" />
+                      <SortableTh label="Drift g"   sortKey="driftG"        currentKey={detailSort.sortKey} currentDir={detailSort.sortDir} onToggle={detailSort.toggle} align="right" />
                     </tr>
                   </thead>
                   <tbody>
-                    {detail.detail.map((r) => (
+                    {detailSort.sorted.map((r) => (
                       <tr key={`${r.receiptId}-${r.itemNumber}`} className="border-b border-border">
                         <td className="px-3 py-1.5 text-xs text-text-faint">
                           {new Date(r.receiptDate).toLocaleDateString()}

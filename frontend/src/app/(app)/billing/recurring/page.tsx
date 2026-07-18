@@ -13,11 +13,21 @@ import { Input } from '@/components/ui/input';
 import { Field } from '@/components/shared/field';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Spinner } from '@/components/ui/spinner';
+import { SortableTh, useTableSort } from '@/components/shared/sortable-table';
 
 export default function RecurringInvoicesPage() {
   const qc = useQueryClient();
   const q = useQuery<any[]>({ queryKey: ['recurring'], queryFn: () => Api.recurring.list() });
   const customersQ = useQuery<any[]>({ queryKey: ['customers'], queryFn: () => Api.billing.customers() });
+
+  const { sorted, sortKey, sortDir, toggle: toggleSort } = useTableSort<any>(
+    q.data,
+    'nextRunDate',
+    'asc',
+    {
+      customer: (r) => r.customer?.customerName ?? '',
+    },
+  );
   const [open, setOpen] = React.useState(false);
   const [form, setForm] = React.useState<any>({
     profileName: '',
@@ -90,16 +100,16 @@ export default function RecurringInvoicesPage() {
             <table className="w-full text-sm">
               <thead className="bg-secondary/30 text-left text-xs text-muted-foreground">
                 <tr>
-                  <th className="px-4 py-2">Profile</th>
-                  <th className="px-4 py-2">Customer</th>
-                  <th className="px-4 py-2">Frequency</th>
-                  <th className="px-4 py-2">Next Run</th>
-                  <th className="px-4 py-2">Status</th>
+                  <SortableTh label="Profile" sortKey="profileName" currentKey={sortKey} currentDir={sortDir} onToggle={toggleSort} />
+                  <SortableTh label="Customer" sortKey="customer" currentKey={sortKey} currentDir={sortDir} onToggle={toggleSort} />
+                  <SortableTh label="Frequency" sortKey="frequency" currentKey={sortKey} currentDir={sortDir} onToggle={toggleSort} />
+                  <SortableTh label="Next Run" sortKey="nextRunDate" currentKey={sortKey} currentDir={sortDir} onToggle={toggleSort} />
+                  <SortableTh label="Status" sortKey="enabled" currentKey={sortKey} currentDir={sortDir} onToggle={toggleSort} />
                   <th className="px-4 py-2"></th>
                 </tr>
               </thead>
               <tbody>
-                {(q.data ?? []).map((r) => (
+                {sorted.map((r) => (
                   <tr key={r.id} className="border-t border-border">
                     <td className="px-4 py-2 font-semibold">{r.profileName}</td>
                     <td className="px-4 py-2">{r.customer?.customerName}</td>

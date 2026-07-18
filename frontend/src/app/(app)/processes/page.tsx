@@ -12,6 +12,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Dialog } from '@/components/ui/dialog';
 import { Field } from '@/components/shared/field';
 import { Spinner } from '@/components/ui/spinner';
+import { SortableTh, useTableSort } from '@/components/shared/sortable-table';
 
 export default function ProcessMasterPage() {
   const qc = useQueryClient();
@@ -20,6 +21,15 @@ export default function ProcessMasterPage() {
   const [form, setForm] = React.useState<any>({});
 
   const q = useQuery<any[]>({ queryKey: ['processes'], queryFn: () => Api.processes() });
+
+  const { sorted, sortKey, sortDir, toggle } = useTableSort<any>(
+    q.data,
+    'sortOrder',
+    'asc',
+    {
+      sortOrder: (r) => Number(r.sortOrder),
+    },
+  );
 
   const reset = () => { setForm({}); setEdit(null); };
 
@@ -66,19 +76,19 @@ export default function ProcessMasterPage() {
             <table className="w-full text-sm">
               <thead className="bg-secondary/30 text-left text-xs text-muted-foreground">
                 <tr>
-                  <th className="px-4 py-2 w-16">Order</th>
-                  <th className="px-4 py-2">Code</th>
-                  <th className="px-4 py-2">Name</th>
-                  <th className="px-4 py-2 text-center">Costed</th>
-                  <th className="px-4 py-2 text-center">BOM Capable</th>
-                  <th className="px-4 py-2 text-center">Bifurcates</th>
-                  <th className="px-4 py-2 text-center">Needs Short Name</th>
-                  <th className="px-4 py-2 text-center">Status</th>
+                  <SortableTh label="Order" sortKey="sortOrder" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Code" sortKey="code" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Name" sortKey="name" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Costed" sortKey="isCosted" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="center" />
+                  <SortableTh label="BOM Capable" sortKey="bomCapable" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="center" />
+                  <SortableTh label="Bifurcates" sortKey="bifurcates" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="center" />
+                  <SortableTh label="Needs Short Name" sortKey="requiresShortName" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="center" />
+                  <SortableTh label="Status" sortKey="status" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="center" />
                   <th className="px-4 py-2"></th>
                 </tr>
               </thead>
               <tbody>
-                {(q.data ?? []).map((p) => (
+                {sorted.map((p) => (
                   <tr key={p.id} className="border-t border-border">
                     <td className="px-4 py-2 text-xs text-muted-foreground">{p.sortOrder}</td>
                     <td className="px-4 py-2 text-xs font-semibold">{p.code}</td>

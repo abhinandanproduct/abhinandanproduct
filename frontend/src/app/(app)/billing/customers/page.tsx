@@ -13,6 +13,7 @@ import { Dialog } from '@/components/ui/dialog';
 import { Field } from '@/components/shared/field';
 import { Card, CardContent } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
+import { SortableTh, useTableSort } from '@/components/shared/sortable-table';
 
 export default function CustomersPage() {
   const qc = useQueryClient();
@@ -27,6 +28,15 @@ export default function CustomersPage() {
     queryKey: ['customers', search],
     queryFn: () => Api.billing.customers(search || undefined),
   });
+
+  const { sorted, sortKey, sortDir, toggle } = useTableSort<any>(
+    customersQ.data,
+    'customerName',
+    'asc',
+    {
+      balance: (r) => Number(r.balance),
+    },
+  );
 
   const openAdd = () => {
     setEditId(null);
@@ -102,17 +112,17 @@ export default function CustomersPage() {
             <table className="w-full text-sm">
               <thead className="bg-secondary/30 text-left text-xs text-muted-foreground">
                 <tr>
-                  <th className="px-4 py-2">Code</th>
-                  <th className="px-4 py-2">Name</th>
-                  <th className="px-4 py-2">GSTIN</th>
-                  <th className="px-4 py-2">Phone</th>
-                  <th className="px-4 py-2">City</th>
-                  <th className="px-4 py-2 text-right">Balance</th>
-                  <th className="px-4 py-2 text-right">Actions</th>
+                  <SortableTh label="Code" sortKey="customerCode" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Name" sortKey="customerName" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="GSTIN" sortKey="gstin" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Phone" sortKey="phone" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="City" sortKey="city" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                  <SortableTh label="Balance" sortKey="balance" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} align="right" />
+                  <th className="px-4 py-2 text-right text-xs font-medium text-muted-foreground">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {(customersQ.data ?? []).map((c) => (
+                {sorted.map((c) => (
                   <tr key={c.id} className="border-t border-border hover:bg-secondary/20">
                     <td className="px-4 py-2 font-semibold">
                       <Link href={`/billing/customers/${c.id}`} className="text-info hover:underline">

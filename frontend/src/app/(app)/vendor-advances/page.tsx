@@ -15,6 +15,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Badge } from '@/components/ui/badge';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { formatDate } from '@/lib/utils';
+import { SortableTh, useTableSort } from '@/components/shared/sortable-table';
 
 type EventType = 'ALLOCATE_ADVANCE' | 'DRAW_INTO_BATCH' | 'RETURN_TO_ADVANCE' | 'ADJUST';
 const EVENT_LABEL: Record<EventType, string> = {
@@ -66,6 +67,26 @@ export default function VendorAdvancesPage() {
 
   const totalAdvance = (balancesQ.data ?? []).reduce((s, r) => s + Number(r.balanceWeight || 0), 0);
   const vendorCount  = new Set((balancesQ.data ?? []).map((r) => r.vendorId)).size;
+
+  const balancesSort = useTableSort<any>(
+    balancesQ.data,
+    'balanceWeight',
+    'desc',
+    {
+      balanceWeight: (r) => Number(r.balanceWeight),
+      updatedAt:     (r) => new Date(r.updatedAt).getTime(),
+    },
+  );
+  const ledgerSort = useTableSort<any>(
+    ledgerQ.data,
+    'createdAt',
+    'desc',
+    {
+      createdAt:    (r) => new Date(r.createdAt).getTime(),
+      weight:       (r) => Number(r.weight),
+      balanceAfter: (r) => Number(r.balanceAfter),
+    },
+  );
 
   return (
     <div className="space-y-4">
@@ -119,15 +140,15 @@ export default function VendorAdvancesPage() {
               <table className="w-full text-sm">
                 <thead className="text-left text-text-faint">
                   <tr>
-                    <th className="py-2 pr-3 font-medium">Vendor</th>
-                    <th className="py-2 pr-3 font-medium">Material variant</th>
-                    <th className="py-2 pr-3 text-right font-medium">Balance (g)</th>
-                    <th className="py-2 pr-3 font-medium">Updated</th>
+                    <SortableTh label="Vendor"           sortKey="vendorName"    currentKey={balancesSort.sortKey} currentDir={balancesSort.sortDir} onToggle={balancesSort.toggle} />
+                    <SortableTh label="Material variant" sortKey="variantName"   currentKey={balancesSort.sortKey} currentDir={balancesSort.sortDir} onToggle={balancesSort.toggle} />
+                    <SortableTh label="Balance (g)"      sortKey="balanceWeight" currentKey={balancesSort.sortKey} currentDir={balancesSort.sortDir} onToggle={balancesSort.toggle} align="right" />
+                    <SortableTh label="Updated"          sortKey="updatedAt"     currentKey={balancesSort.sortKey} currentDir={balancesSort.sortDir} onToggle={balancesSort.toggle} />
                     <th className="py-2 font-medium text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {balancesQ.data!.map((r: any) => (
+                  {balancesSort.sorted.map((r: any) => (
                     <tr key={`${r.vendorId}-${r.variantId}`} className="border-t border-border">
                       <td className="py-2 pr-3">
                         <div className="font-medium">{r.vendorName}</div>
@@ -175,18 +196,18 @@ export default function VendorAdvancesPage() {
               <table className="w-full text-sm">
                 <thead className="text-left text-text-faint">
                   <tr>
-                    <th className="py-2 pr-3 font-medium">When</th>
-                    <th className="py-2 pr-3 font-medium">Event</th>
-                    <th className="py-2 pr-3 font-medium">Vendor</th>
-                    <th className="py-2 pr-3 font-medium">Variant</th>
-                    <th className="py-2 pr-3 text-right font-medium">Weight (g)</th>
-                    <th className="py-2 pr-3 text-right font-medium">Balance after</th>
-                    <th className="py-2 pr-3 font-medium">Note</th>
+                    <SortableTh label="When"          sortKey="createdAt"    currentKey={ledgerSort.sortKey} currentDir={ledgerSort.sortDir} onToggle={ledgerSort.toggle} />
+                    <SortableTh label="Event"         sortKey="eventType"    currentKey={ledgerSort.sortKey} currentDir={ledgerSort.sortDir} onToggle={ledgerSort.toggle} />
+                    <SortableTh label="Vendor"        sortKey="vendorName"   currentKey={ledgerSort.sortKey} currentDir={ledgerSort.sortDir} onToggle={ledgerSort.toggle} />
+                    <SortableTh label="Variant"       sortKey="variantName"  currentKey={ledgerSort.sortKey} currentDir={ledgerSort.sortDir} onToggle={ledgerSort.toggle} />
+                    <SortableTh label="Weight (g)"    sortKey="weight"       currentKey={ledgerSort.sortKey} currentDir={ledgerSort.sortDir} onToggle={ledgerSort.toggle} align="right" />
+                    <SortableTh label="Balance after" sortKey="balanceAfter" currentKey={ledgerSort.sortKey} currentDir={ledgerSort.sortDir} onToggle={ledgerSort.toggle} align="right" />
+                    <SortableTh label="Note"          sortKey="note"         currentKey={ledgerSort.sortKey} currentDir={ledgerSort.sortDir} onToggle={ledgerSort.toggle} />
                     <th className="py-2 font-medium text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {ledgerQ.data!.map((r: any) => {
+                  {ledgerSort.sorted.map((r: any) => {
                     // Production draws (DRAW_INTO_BATCH) can't be edited or
                     // deleted here — they're linked to a receipt. Edit them
                     // via the source receipt so stock/lot effects unwind

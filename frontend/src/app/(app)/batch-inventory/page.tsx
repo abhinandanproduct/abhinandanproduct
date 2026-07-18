@@ -13,6 +13,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { formatDate } from '@/lib/utils';
 import { BatchDetail } from '../casting/issue/batch-detail';
 import { cn } from '@/lib/utils';
+import { SortableTh, useTableSort } from '@/components/shared/sortable-table';
 
 /**
  * Batch Inventory — history of every batch, partitioned into FOUR folders:
@@ -134,7 +135,18 @@ function Folder({
   onOpen: (id: number) => void;
 }) {
   const [open, setOpen] = React.useState(false);
-  const rows = batches;
+  const { sorted, sortKey, sortDir, toggle } = useTableSort<any>(
+    batches,
+    'batchDate',
+    'desc',
+    {
+      piecesOrdered: (r) => Number(r.piecesOrdered),
+      designs: (r) => (r.designNumbers ?? []).join(', '),
+      processes: (r) => (r.processNames ?? []).join(', '),
+      status: (r) => r.displayStatus ?? '',
+    },
+  );
+  const rows = sorted;
 
   const tones: Record<string, { ring: string; pill: string; head: string }> = {
     red:     { ring: 'border-destructive/30 bg-destructive/10/40',      pill: 'bg-destructive/15 text-destructive',      head: 'text-destructive' },
@@ -170,13 +182,13 @@ function Folder({
                 <table className="w-full min-w-[720px] text-sm">
                   <thead className="bg-muted/30 text-left text-text-muted">
                     <tr>
-                      <th className="px-3 py-2">Batch #</th>
-                      <th className="px-3 py-2">Date</th>
-                      <th className="px-3 py-2">Designs</th>
-                      <th className="px-3 py-2">Pcs Ordered</th>
-                      <th className="px-3 py-2">Processes</th>
-                      <th className="px-3 py-2">Status</th>
-                      <th className="px-3 py-2 text-right">Action</th>
+                      <SortableTh label="Batch #" sortKey="batchNumber" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                      <SortableTh label="Date" sortKey="batchDate" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                      <SortableTh label="Designs" sortKey="designs" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                      <SortableTh label="Pcs Ordered" sortKey="piecesOrdered" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                      <SortableTh label="Processes" sortKey="processes" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                      <SortableTh label="Status" sortKey="status" currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
+                      <th className="px-3 py-2 text-right text-xs font-medium text-muted-foreground">Action</th>
                     </tr>
                   </thead>
                   <tbody>

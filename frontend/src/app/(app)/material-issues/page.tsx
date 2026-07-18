@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { formatDate } from '@/lib/utils';
 import type { Vendor, MaterialVariant } from '@/lib/types';
+import { SortableTh, useTableSort } from '@/components/shared/sortable-table';
 
 /**
  * Raw Material Issue & Return — voucher-based tracking of materials going to a
@@ -43,6 +44,19 @@ export default function MaterialIssuesPage() {
 
   const issues = issuesQ.data ?? [];
   const holdings = holdingsQ.data ?? [];
+
+  const { sorted: sortedIssues, sortKey: issuesSortKey, sortDir: issuesSortDir, toggle: toggleIssues } = useTableSort<any>(
+    issues,
+    'issueDate',
+    'desc',
+    {
+      lineCount: (r) => Number(r.lineCount),
+      totalIssued: (r) => Number(r.totalIssued),
+      totalReceived: (r) => Number(r.totalReceived),
+      totalShort: (r) => Number(r.totalShort ?? 0),
+      vendor: (r) => `${r.vendorCode ?? ''} ${r.vendorName ?? ''}`,
+    },
+  );
 
   // Group holdings by vendor for display.
   const holdingsByVendor = React.useMemo(() => {
@@ -98,19 +112,19 @@ export default function MaterialIssuesPage() {
               <table className="w-full min-w-[760px] text-sm">
                 <thead className="bg-muted/40 text-left text-text-muted">
                   <tr>
-                    <th className="px-4 py-2">Voucher</th>
-                    <th className="px-4 py-2">Date</th>
-                    <th className="px-4 py-2">Vendor</th>
-                    <th className="px-4 py-2">Linked Batch</th>
-                    <th className="px-4 py-2">Lines</th>
-                    <th className="px-4 py-2 text-right">Issued</th>
-                    <th className="px-4 py-2 text-right">Received</th>
-                    <th className="px-4 py-2 text-right">Short</th>
-                    <th className="px-4 py-2">Status</th>
+                    <SortableTh label="Voucher" sortKey="voucherNumber" currentKey={issuesSortKey} currentDir={issuesSortDir} onToggle={toggleIssues} />
+                    <SortableTh label="Date" sortKey="issueDate" currentKey={issuesSortKey} currentDir={issuesSortDir} onToggle={toggleIssues} />
+                    <SortableTh label="Vendor" sortKey="vendor" currentKey={issuesSortKey} currentDir={issuesSortDir} onToggle={toggleIssues} />
+                    <SortableTh label="Linked Batch" sortKey="batchNumber" currentKey={issuesSortKey} currentDir={issuesSortDir} onToggle={toggleIssues} />
+                    <SortableTh label="Lines" sortKey="lineCount" currentKey={issuesSortKey} currentDir={issuesSortDir} onToggle={toggleIssues} />
+                    <SortableTh label="Issued" sortKey="totalIssued" currentKey={issuesSortKey} currentDir={issuesSortDir} onToggle={toggleIssues} align="right" />
+                    <SortableTh label="Received" sortKey="totalReceived" currentKey={issuesSortKey} currentDir={issuesSortDir} onToggle={toggleIssues} align="right" />
+                    <SortableTh label="Short" sortKey="totalShort" currentKey={issuesSortKey} currentDir={issuesSortDir} onToggle={toggleIssues} align="right" />
+                    <SortableTh label="Status" sortKey="status" currentKey={issuesSortKey} currentDir={issuesSortDir} onToggle={toggleIssues} />
                   </tr>
                 </thead>
                 <tbody>
-                  {issues.map((r: any) => (
+                  {sortedIssues.map((r: any) => (
                     <tr key={r.id} className="cursor-pointer border-t border-border hover:bg-muted/40" onClick={() => setViewId(r.id)}>
                       <td className="px-4 py-2 font-semibold text-primary">{r.voucherNumber}</td>
                       <td className="px-4 py-2 text-muted-foreground">{formatDate(r.issueDate)}</td>
