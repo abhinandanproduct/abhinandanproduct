@@ -754,7 +754,10 @@ export class BillingService {
         customer: true,
         items: { select: { quantity: true, weightG: true } },
       },
-      orderBy: { invoiceDate: 'desc' },
+      // Ascending by date so the oldest bill sits at the top and the
+      // sequence (ABN-000001, ABN-000002, …) reads top-to-bottom, matching
+      // how operators think about invoice history.
+      orderBy: { invoiceDate: 'asc' },
       take: 200,
     });
     // Attach summary totals so the list page can render them without loading

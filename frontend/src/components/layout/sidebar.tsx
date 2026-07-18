@@ -51,31 +51,34 @@ const section = (label: string): Section => ({ kind: 'section', label });
 const group = (id: string, label: string, icon: any, children: Link[]): Group =>
   ({ kind: 'group', id, label, icon, children });
 
+// Every category is a collapsible group so the sidebar stays scannable —
+// no mix of flat sections vs. dropdowns. Only Dashboard sits at the top
+// level (it's the landing page, single link — a 1-child dropdown would
+// just be noise). Groups auto-open when the current route is inside them.
 const nav: NavEntry[] = [
-  section('Overview'),
   link('/dashboard', 'Dashboard', LayoutGrid),
 
-  section('Masters'),
-  link('/vendors',           'Vendor Master',     Truck),
-  link('/billing/customers', 'Customer Master',   Users2),
-  link('/materials',         'Material Variants', Gem),
-  link('/items',             'Item Master',       Package),
-  link('/processes',         'Process Master',    Layers),
+  group('masters', 'Masters', Users2, [
+    link('/vendors',           'Vendor Master',     Truck),
+    link('/billing/customers', 'Customer Master',   Users2),
+    link('/materials',         'Material Variants', Gem),
+    link('/items',             'Item Master',       Package),
+    link('/processes',         'Process Master',    Layers),
+  ]),
 
-  section('Production'),
-  link('/casting/batches',      'Production Management', Layers),
-  link('/produced',             'Production Tracking',   PackageCheck),
-  link('/production-inventory', 'Production Inventory',  Boxes),
-  link('/batch-inventory',      'Batch Inventory',       ClipboardList),
-  link('/repairs',              'Repair Orders',         Wrench),
+  group('production', 'Production', PackageCheck, [
+    link('/casting/batches',      'Production Management', Layers),
+    link('/produced',             'Production Tracking',   PackageCheck),
+    link('/production-inventory', 'Production Inventory',  Boxes),
+    link('/batch-inventory',      'Batch Inventory',       ClipboardList),
+    link('/repairs',              'Repair Orders',         Wrench),
+  ]),
 
-  section('Inventory'),
-  link('/inventory',       'Raw Materials Inventory', Boxes),
-  link('/material-issues', 'Material Issues',         Receipt),
+  group('inventory', 'Inventory', Boxes, [
+    link('/inventory',       'Raw Materials Inventory', Boxes),
+    link('/material-issues', 'Material Issues',         Receipt),
+  ]),
 
-  // Billing sections collapsed as dropdown groups so daily-use pages
-  // (Production, Inventory) stay above the fold. Expanded on-hover and
-  // auto-opens when the current route falls inside the group.
   group('sales', 'Sales', ShoppingCart, [
     link('/billing/quotes',       'Estimates',          ScrollText),
     link('/billing/sales-orders', 'Sales Orders',       ClipboardList),
@@ -104,9 +107,10 @@ const nav: NavEntry[] = [
     link('/reports',         'Reports',         BarChart3),
   ]),
 
-  section('Admin'),
-  link('/admin/activity', 'Activity Log',    Activity),
-  link('/admin/users',    'User Management', Users),
+  group('admin', 'Admin', Settings, [
+    link('/admin/activity', 'Activity Log',    Activity),
+    link('/admin/users',    'User Management', Users),
+  ]),
 ];
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
