@@ -46,6 +46,18 @@ interface InvoiceData {
   totalWeightG?: any;
   purpose?: string | null;
   notes: string | null;
+  // Coverages this ABN tax invoice creates. When present, the PDF prints
+  // a "Silver received against:" note listing each estimate this invoice's
+  // metal settles, with a "(partial — Xg of Yg, Zg still pending)" tail on
+  // any estimate that isn't fully closed by this + prior coverages.
+  coverages?: Array<{
+    estimateNumber: string;
+    silverAllocatedG: number;
+    requiredG: number;
+    allocatedG: number;
+    remainingG: number;
+    status: 'OPEN' | 'PARTIAL' | 'CLOSED';
+  }>;
   customer?: {
     customerName: string;
     phone: string | null;
@@ -991,6 +1003,24 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
        .text('Notes', M, notesY, { lineBreak: false });
     doc.fillColor('#000000').font('Helvetica').fontSize(10)
        .text(inv.notes, M, notesY + 16, { width: innerW - tboxW - 20 });
+  }
+  // Coverages: one bulleted line per estimate this metal invoice settles,
+  // with a "(partial — Xg of Yg, Zg still pending)" tail for anything not
+  // fully closed by the running sum of coverages this estimate has seen.
+  if (inv.coverages && inv.coverages.length) {
+    const coversY = y + (inv.notes ? 92 : 52);
+    doc.fillColor('#000000').font('Helvetica-Bold').fontSize(10)
+       .text('Silver received against', M, coversY, { lineBreak: false });
+    doc.fillColor('#000000').font('Helvetica').fontSize(9);
+    let ly = coversY + 16;
+    for (const c of inv.coverages) {
+      const isPartial = c.status === 'PARTIAL';
+      const label = isPartial
+        ? `${c.estimateNumber} — ${c.silverAllocatedG.toFixed(3)} g (partial — ${c.allocatedG.toFixed(3)} g of ${c.requiredG.toFixed(3)} g, ${c.remainingG.toFixed(3)} g still pending)`
+        : `${c.estimateNumber} — ${c.silverAllocatedG.toFixed(3)} g (closed)`;
+      doc.text(`• ${label}`, M, ly, { width: innerW - tboxW - 20 });
+      ly += 12;
+    }
   }
 
   // ── AUTHORIZED SIGNATORY — bottom-right, aligned with totals box ──

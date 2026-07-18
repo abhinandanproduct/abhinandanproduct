@@ -1020,10 +1020,57 @@ export class BillingService {
   async getInvoice(id: number) {
     const inv = await this.prisma.invoice.findUnique({
       where: { id },
-      include: { items: true, customer: true, allocations: { include: { payment: true } } },
+      include: {
+        items: true,
+        customer: true,
+        allocations: { include: { payment: true } },
+        // Coverages this invoice creates → the covered estimates (their
+        // silver requirement + a running sum of every coverage they've
+        // received so we can label CLOSED vs PARTIAL on the PDF).
+        coverages: {
+          include: {
+            estimate: {
+              include: {
+                items:      { select: { quantity: true, weightG: true } },
+                coveredBy:  { select: { silverAllocatedG: true } },
+              },
+            },
+          },
+        },
+      },
     });
     if (!inv) throw new NotFoundException('Invoice not found.');
-    return inv;
+    // Enrich each coverage with a computed { requiredG, allocatedG,
+    // remainingG, status } so the PDF/UI can render without repeating
+    // the derivation.
+    const enrichedCoverages = (inv as any).coverages?.map((c: any) => {
+      const est = c.estimate;
+      const derivedWt = est.items.reduce(
+        (s: number, it: any) => s + Number(it.quantity ?? 0) * Number(it.weightG ?? 0),
+        0,
+      );
+      const requiredG = r3(
+        est.totalWeightG != null && Number(est.totalWeightG) > 0
+          ? Number(est.totalWeightG)
+          : derivedWt,
+      );
+      const allocatedG = r3(
+        est.coveredBy.reduce((s: number, x: any) => s + Number(x.silverAllocatedG), 0),
+      );
+      const remainingG = r3(Math.max(0, requiredG - allocatedG));
+      const status =
+        allocatedG <= 0                    ? 'OPEN'
+        : allocatedG + 0.0005 >= requiredG ? 'CLOSED'
+        : 'PARTIAL';
+      return {
+        id: c.id,
+        estimateId: c.estimateId,
+        estimateNumber: est.invoiceNumber,
+        silverAllocatedG: Number(c.silverAllocatedG),
+        requiredG, allocatedG, remainingG, status,
+      };
+    }) ?? [];
+    return { ...inv, coverages: enrichedCoverages };
   }
 
   async cancelInvoice(id: number) {

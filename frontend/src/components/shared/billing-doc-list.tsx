@@ -3,7 +3,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Search, Ban, Printer, Trash2, FileText } from 'lucide-react';
+import { Plus, Search, Ban, Printer, Trash2, FileText, MoreVertical } from 'lucide-react';
 import { toast } from 'sonner';
 import { Api, getApiError } from '@/lib/api';
 import { useFiscalYear } from '@/lib/fiscal-year';
@@ -201,42 +201,45 @@ export function BillingDocList({
                       ₹{Number(inv.balanceAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
                     <td className="px-2 py-2 whitespace-nowrap">
-                      <div className="flex justify-end gap-0.5">
-                        {showTempAction && inv.status !== 'CANCELLED' && (
-                          <Button variant="outline" size="icon"
-                            title="Generate Temp Invoice — consolidate all lines into a single silver row (prints as regular invoice)"
-                            disabled={genTemp.isPending}
-                            onClick={() => {
+                      <RowActionsMenu
+                        actions={[
+                          ...(showTempAction && inv.status !== 'CANCELLED' ? [{
+                            key: 'temp',
+                            label: 'Generate Temp Invoice',
+                            icon: FileText,
+                            disabled: genTemp.isPending,
+                            onClick: () => {
                               if (confirm(`Generate temp invoice from ${inv.invoiceNumber}?\n\nAll line items will be summed into ONE consolidated silver row. Prints as a regular invoice; the TEMP marker is software-only.`)) {
                                 genTemp.mutate(inv.id);
                               }
-                            }}>
-                            <FileText className="size-4" />
-                          </Button>
-                        )}
-                        <Button variant="outline" size="icon" title="Print"
-                          onClick={() => window.open(Api.billing.invoicePdfUrl(inv.id), '_blank')}>
-                          <Printer className="size-4" />
-                        </Button>
-                        {inv.status !== 'CANCELLED' && (
-                          <Button variant="outline" size="icon" className="text-warning hover:bg-warning/10"
-                            title="Cancel (status → CANCELLED, keeps row)"
-                            onClick={() => {
-                              if (confirm(`Cancel ${inv.invoiceNumber}?`)) cancel.mutate(inv.id);
-                            }}>
-                            <Ban className="size-4" />
-                          </Button>
-                        )}
-                        <Button variant="outline" size="icon" className="text-destructive hover:bg-destructive/10"
-                          title="Delete (hard remove — testing only)"
-                          onClick={() => {
-                            if (confirm(`Permanently delete ${inv.invoiceNumber}?\n\nThis removes the row + all line items, charges, allocations. AR balance is unwound.`)) {
-                              remove.mutate(inv.id);
-                            }
-                          }}>
-                          <Trash2 className="size-4" />
-                        </Button>
-                      </div>
+                            },
+                          }] : []),
+                          {
+                            key: 'print',
+                            label: 'Print',
+                            icon: Printer,
+                            onClick: () => window.open(Api.billing.invoicePdfUrl(inv.id), '_blank'),
+                          },
+                          ...(inv.status !== 'CANCELLED' ? [{
+                            key: 'cancel',
+                            label: 'Cancel',
+                            icon: Ban,
+                            tone: 'warning' as const,
+                            onClick: () => { if (confirm(`Cancel ${inv.invoiceNumber}?`)) cancel.mutate(inv.id); },
+                          }] : []),
+                          {
+                            key: 'delete',
+                            label: 'Delete (hard remove)',
+                            icon: Trash2,
+                            tone: 'destructive' as const,
+                            onClick: () => {
+                              if (confirm(`Permanently delete ${inv.invoiceNumber}?\n\nThis removes the row + all line items, charges, allocations. AR balance is unwound.`)) {
+                                remove.mutate(inv.id);
+                              }
+                            },
+                          },
+                        ]}
+                      />
                     </td>
                   </tr>
                 ))}
@@ -249,6 +252,81 @@ export function BillingDocList({
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+type RowAction = {
+  key: string;
+  label: string;
+  icon: any;
+  disabled?: boolean;
+  tone?: 'default' | 'warning' | 'destructive';
+  onClick: () => void;
+};
+
+/**
+ * Per-row overflow menu — one ⋯ button in the last column that opens a
+ * small popover with every action available for the row. Keeps the row
+ * width predictable no matter how many columns / how wide the viewport.
+ *
+ * Closes on outside click and on Escape. Positioned above-right (bottom-
+ * anchored above the trigger) so the last-row menu doesn't clip off the
+ * bottom of the viewport.
+ */
+function RowActionsMenu({ actions }: { actions: RowAction[] }) {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef<HTMLDivElement | null>(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  return (
+    <div ref={ref} className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label="Row actions"
+        className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border bg-secondary/40 text-foreground/70 transition-colors hover:bg-secondary hover:text-foreground"
+      >
+        <MoreVertical className="size-4" />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-full z-30 mt-1 min-w-[200px] rounded-md border border-border bg-card shadow-lg"
+        >
+          <ul className="py-1">
+            {actions.map((a) => (
+              <li key={a.key}>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={a.disabled}
+                  onClick={() => { setOpen(false); a.onClick(); }}
+                  className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                    a.tone === 'destructive' ? 'text-destructive hover:bg-destructive/10'
+                    : a.tone === 'warning'   ? 'text-warning hover:bg-warning/10'
+                    : 'hover:bg-secondary'
+                  }`}
+                >
+                  <a.icon className="size-4 shrink-0" />
+                  <span>{a.label}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
