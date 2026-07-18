@@ -137,8 +137,8 @@ export function BillingDocList({
               <Spinner /> Loading...
             </div>
           ) : (
-            <div className="overflow-x-auto">
-            <table className="w-full text-sm" style={isEstimate ? { minWidth: 1200 } : undefined}>
+            <div>
+            <table className="w-full text-sm">
               <thead className="bg-secondary/30 text-left text-xs text-muted-foreground">
                 <tr>
                   <SortableTh label="Number"   sortKey="invoiceNumber"  currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
@@ -160,7 +160,7 @@ export function BillingDocList({
               <tbody>
                 {sorted.map((inv) => (
                   <tr key={inv.id} className="border-t border-border hover:bg-secondary/20">
-                    <td className="px-4 py-2 font-semibold tracking-tight">
+                    <td className="px-2 py-2 font-semibold tracking-tight whitespace-nowrap">
                       <Link href={`/billing/invoices/${inv.id}`} className="text-info hover:underline">
                         {inv.invoiceNumber}
                       </Link>
@@ -171,33 +171,33 @@ export function BillingDocList({
                         </span>
                       )}
                     </td>
-                    <td className="px-4 py-2 text-xs">{new Date(inv.invoiceDate).toLocaleDateString('en-IN')}</td>
-                    <td className="px-4 py-2 max-w-[200px] truncate" title={inv.billToName}>{inv.billToName}</td>
-                    <td className="px-4 py-2">
+                    <td className="px-2 py-2 text-xs whitespace-nowrap">{new Date(inv.invoiceDate).toLocaleDateString('en-IN')}</td>
+                    <td className="px-2 py-2 max-w-[160px] truncate" title={inv.billToName}>{inv.billToName}</td>
+                    <td className="px-2 py-2">
                       <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${STATUS_BADGE[inv.status] ?? STATUS_BADGE.DRAFT}`}>
                         {inv.status}
                       </span>
                     </td>
                     {isEstimate && (
                       <>
-                        <td className="px-4 py-2 text-right tabular-nums text-xs">
+                        <td className="px-2 py-2 text-right tabular-nums text-xs whitespace-nowrap">
                           {Number(inv.summary?.silverRequiredG ?? 0).toFixed(3)}
                         </td>
-                        <td className="px-4 py-2 text-right tabular-nums text-xs">
+                        <td className="px-2 py-2 text-right tabular-nums text-xs whitespace-nowrap">
                           {Number(inv.summary?.silverAllocatedG ?? 0).toFixed(3)}
                         </td>
-                        <td className="px-4 py-2">
+                        <td className="px-2 py-2">
                           <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${SILVER_BADGE[inv.summary?.silverStatus ?? 'OPEN']}`}>
                             {inv.summary?.silverStatus ?? 'OPEN'}
                           </span>
                         </td>
                       </>
                     )}
-                    <td className="px-4 py-2 text-right font-medium tabular-nums">
-                      ₹ {Number(inv.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    <td className="px-2 py-2 text-right font-medium tabular-nums whitespace-nowrap">
+                      ₹{Number(inv.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
-                    <td className="px-4 py-2 text-right tabular-nums text-warning">
-                      ₹ {Number(inv.balanceAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    <td className="px-2 py-2 text-right tabular-nums text-warning whitespace-nowrap">
+                      ₹{Number(inv.balanceAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
                     <td className="px-4 py-2">
                       <div className="flex justify-end gap-1">
