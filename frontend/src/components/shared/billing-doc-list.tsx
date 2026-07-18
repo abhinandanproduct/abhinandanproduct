@@ -94,11 +94,12 @@ export function BillingDocList({
   const showTempAction = type === 'QUOTE' || type === 'ESTIMATE';
   const isEstimate     = type === 'QUOTE' || type === 'ESTIMATE';
 
-  // Sort by the invoice date ascending by default (matches the ordering the
-  // backend now returns; clickable headers let the operator flip any column).
+  // Sort by invoice number ascending by default — matches the backend's
+  // ordering and how operators scan bills. Clickable headers let the
+  // operator flip to any other column when needed.
   const { sorted, sortKey, sortDir, toggle } = useTableSort<any>(
     q.data,
-    'invoiceDate',
+    'invoiceNumber',
     'asc',
     {
       // Total + Balance come off the wire as strings — pull them as numbers

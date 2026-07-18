@@ -958,10 +958,11 @@ export class BillingService {
         customer: true,
         items: { select: { quantity: true, weightG: true } },
       },
-      // Ascending by date so the oldest bill sits at the top and the
-      // sequence (ABN-000001, ABN-000002, …) reads top-to-bottom, matching
-      // how operators think about invoice history.
-      orderBy: { invoiceDate: 'asc' },
+      // Sort by invoice number ascending — every list is already filtered
+      // to one type, so the alphabetic sort keeps the sequence in numeric
+      // order (ABN-000001, ABN-000002, …; EST0001, EST0002, …). Operators
+      // scan bills by number, not date, so date-order was mis-cueing them.
+      orderBy: { invoiceNumber: 'asc' },
       take: 200,
     });
 

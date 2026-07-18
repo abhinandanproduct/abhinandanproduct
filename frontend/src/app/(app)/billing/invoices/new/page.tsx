@@ -155,9 +155,14 @@ export default function NewInvoicePage() {
     queryFn: () => Api.billing.invoices({ type: 'QUOTE', customerId: Number(customerId) }),
     enabled: !!customerId && type === 'TAX_INVOICE',
   });
-  const openEstimates = (openEstimatesQ.data ?? []).filter(
-    (e: any) => e.status !== 'CANCELLED' && (e.summary?.silverStatus ?? 'OPEN') !== 'CLOSED',
-  );
+  // Explicit sort by invoice number so the coverage picker rows read
+  // EST0001, EST0002, EST0003, … regardless of when each was created.
+  const openEstimates = (openEstimatesQ.data ?? [])
+    .filter((e: any) => e.status !== 'CANCELLED' && (e.summary?.silverStatus ?? 'OPEN') !== 'CLOSED')
+    .slice()
+    .sort((a: any, b: any) =>
+      String(a.invoiceNumber ?? '').localeCompare(String(b.invoiceNumber ?? ''), undefined, { numeric: true }),
+    );
 
   // "Mixed Silver Jewellery" line detection — trigger for the coverage
   // field. Case-insensitive substring match on either the item slot or
