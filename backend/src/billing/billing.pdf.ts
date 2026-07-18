@@ -500,7 +500,11 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
     // The old GST/CGST/SGST super-band hierarchy is gone per operator
     // spec: no separate "%" sub-column means no need for the nested
     // rows-of-rows layout.
-    const headerH = 22;
+    // Header row taller than the previous 22pt band so 2-line labels
+    // ("Item & Description", "HSN/SAC", "Gross Wt") don't feel crushed
+    // against the top/bottom borders. Extra 4pt gives ~2pt breathing
+    // room above and below each label.
+    const headerH = 26;
     doc.rect(M, startY, innerW, headerH).fill('#e5e7eb');
     doc.fillColor('#000000').font('Helvetica-Bold').fontSize(9);
     doc.strokeColor(gridColor).lineWidth(0.5)
@@ -533,7 +537,7 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
   // Row height — portrait has more vertical room per page (842pt vs
   // landscape 595pt) so we use taller rows for readability. Landscape
   // stays tight because 17+ columns need to fit horizontally.
-  const rowH = isPortrait ? 22 : 18;
+  const rowH = isPortrait ? 24 : 20;
   // Truncate any cell value that would overflow its column. PDFKit's
   // lineBreak:false doesn't always prevent wrap for narrow left-aligned
   // cells, so we manually clip with an ellipsis before rendering.
