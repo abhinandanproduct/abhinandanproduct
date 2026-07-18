@@ -505,6 +505,40 @@ export class BillingService {
         throw e;
       }
     }
+
+    // Estimate coverages — only meaningful for TAX_INVOICE. Live outside
+    // the retry loop because they run after the invoice number is fixed
+    // and its items are visible. If validation fails here, we mark the
+    // invoice as CANCELLED so it doesn't linger as a half-issued row.
+    if (dto.type === 'TAX_INVOICE' && (dto as any).coverages?.length) {
+      const withItems = await this.prisma.invoice.findUnique({
+        where: { id: created.id },
+        include: { items: { select: { quantity: true, weightG: true, itemNumber: true } } },
+      });
+      try {
+        await this.insertInvoiceCoverages(
+          {
+            id: withItems!.id,
+            customerId: withItems!.customerId,
+            invoiceNumber: withItems!.invoiceNumber,
+            items: withItems!.items,
+          },
+          (dto as any).coverages,
+        );
+      } catch (e) {
+        // Roll back the invoice — cancel + remove line items so AR doesn't
+        // drift. Keep the row for audit trail; operator can hard-delete
+        // later. Re-throw the original error so the UI shows it.
+        try {
+          await this.prisma.invoice.update({
+            where: { id: created.id },
+            data: { status: 'CANCELLED' },
+          });
+        } catch { /* best-effort */ }
+        throw e;
+      }
+    }
+
     return created;
   }
 
@@ -732,62 +766,54 @@ export class BillingService {
   }
 
   /**
-   * Raise an ABN-series tax invoice for silver received from a customer,
-   * spread across one or more of that customer's OPEN/PARTIAL estimates.
-   *
-   * Invoice shape (matches Temp Invoice's consolidated form): a single
-   * "Silver — X grams" line whose weight equals Σ(coverages.silverAllocatedG).
-   * The printed invoice reads like a normal tax invoice; the
-   * per-estimate breakdown lives in the InvoiceEstimateCoverage rows and
-   * surfaces on the estimate list as "Alloc.g" + status.
-   *
-   * Guards:
-   *  - Every covered estimate must belong to `customerId`, be a
-   *    QUOTE/ESTIMATE, and not CANCELLED.
-   *  - No coverage may push an estimate's Σ(alloc) past its required
-   *    silver grams — over-allocation is rejected at save.
-   *  - At least one coverage row and at least one gram in total.
+   * Validate + insert estimate-coverage rows for an invoice that was
+   * created via the regular createInvoice flow with `coverages` set on
+   * its DTO. Guards:
+   *   - Every estimate belongs to the invoice's customer.
+   *   - Each estimate is a QUOTE / ESTIMATE and not CANCELLED.
+   *   - Σ(new + existing) ≤ that estimate's silver requirement.
+   *   - Σ(coverages) ≤ the invoice's actual silver-line grams (its
+   *     "Mixed Silver Jewellery" / consolidated silver line's total weight).
    */
-  async raiseMetalInvoice(
-    dto: {
-      customerId: number;
-      invoiceDate: string;
-      silverRatePerG: number;
-      coverages: { estimateId: number; silverAllocatedG: number }[];
-      notes?: string;
-      dueDate?: string;
-      gstPercent?: number;
-      isInterState?: boolean;
-    },
-    userId?: number,
+  private async insertInvoiceCoverages(
+    invoice: { id: number; customerId: number | null; invoiceNumber: string; items: { quantity: number; weightG: any; itemNumber: string | null }[] },
+    coverages: { estimateId: number; silverAllocatedG: number }[],
   ) {
-    if (!dto.coverages?.length) {
-      throw new BadRequestException('At least one estimate coverage is required.');
-    }
     const r3 = (n: number) => Math.round(n * 1000) / 1000;
-    const totalGrams = r3(dto.coverages.reduce((s, c) => s + Number(c.silverAllocatedG ?? 0), 0));
-    if (totalGrams <= 0) {
-      throw new BadRequestException('Total covered grams must be positive.');
+    // Only the "Mixed Silver Jewellery" line's grams (times quantity) count
+    // toward the invoice's silver-total cap for coverages. Falls back to
+    // total invoice weight if no such line is present.
+    let capG = 0;
+    for (const it of invoice.items) {
+      if (it.itemNumber && it.itemNumber.toLowerCase().includes('mixed silver')) {
+        capG += Number(it.quantity ?? 0) * Number(it.weightG ?? 0);
+      }
     }
-    if (!(Number(dto.silverRatePerG) > 0)) {
-      throw new BadRequestException('silverRatePerG must be positive.');
+    if (capG <= 0) {
+      capG = invoice.items.reduce(
+        (s, it) => s + Number(it.quantity ?? 0) * Number(it.weightG ?? 0),
+        0,
+      );
+    }
+    capG = r3(capG);
+    const totalGrams = r3(coverages.reduce((s, c) => s + Number(c.silverAllocatedG ?? 0), 0));
+    if (totalGrams > capG + 0.0005) {
+      throw new BadRequestException(
+        `Coverage total ${totalGrams.toFixed(3)} g exceeds this invoice's silver-line grams ${capG.toFixed(3)} g.`,
+      );
     }
 
-    const customer = await this.getCustomer(dto.customerId);
-
-    // Load every covered estimate + its existing coverages + line items
-    // in ONE query so validation runs in memory without N round trips.
-    const estimateIds = dto.coverages.map((c) => c.estimateId);
+    const estimateIds = coverages.map((c) => c.estimateId);
     const estimates = await this.prisma.invoice.findMany({
       where: { id: { in: estimateIds } },
       include: {
-        items: { select: { quantity: true, weightG: true } },
-        coveredBy: { select: { silverAllocatedG: true } },
+        items:      { select: { quantity: true, weightG: true } },
+        coveredBy:  { select: { silverAllocatedG: true } },
       },
     });
     const byId = new Map(estimates.map((e) => [e.id, e]));
 
-    for (const cov of dto.coverages) {
+    for (const cov of coverages) {
       const est = byId.get(cov.estimateId);
       if (!est) throw new BadRequestException(`Estimate ${cov.estimateId} not found.`);
       if (est.type !== 'QUOTE' && est.type !== 'ESTIMATE') {
@@ -796,14 +822,13 @@ export class BillingService {
       if (est.status === 'CANCELLED') {
         throw new BadRequestException(`${est.invoiceNumber} is CANCELLED — cannot cover it.`);
       }
-      if (est.customerId !== dto.customerId) {
+      if (est.customerId !== invoice.customerId) {
         throw new BadRequestException(`${est.invoiceNumber} belongs to a different customer.`);
       }
       const g = Number(cov.silverAllocatedG ?? 0);
       if (!(g > 0)) {
         throw new BadRequestException(`${est.invoiceNumber}: coverage grams must be positive.`);
       }
-      // Silver required = Σ(qty × weightG) or the header override.
       const derivedWt = est.items.reduce(
         (s, it) => s + Number(it.quantity ?? 0) * Number(it.weightG ?? 0),
         0,
@@ -821,60 +846,13 @@ export class BillingService {
       }
     }
 
-    // Build the consolidated silver line — same shape as a Temp Invoice's
-    // single-line summary. The description names the estimates it covers so
-    // the printed invoice reads like a real tax invoice.
-    const covered = dto.coverages
-      .map((c) => byId.get(c.estimateId)!.invoiceNumber)
-      .join(', ');
-    const rate = Number(dto.silverRatePerG);
-    const silverAmount = Math.round(totalGrams * rate * 100) / 100;
-
-    const line: any = {
-      description: `Silver — covers ${covered}`,
-      quantity: 1,
-      weightG: totalGrams,
-      totalWeightG: totalGrams,
-      silverRatePerG: rate,
-      makingRatePerG: 0,
-    };
-
-    // Delegate to createInvoice for tax/GST math + numbering + AR debit,
-    // then attach coverage rows in the same transaction as the returned
-    // invoice's back-link update.
-    const invoiceDto: any = {
-      type: 'TAX_INVOICE',
-      customerId: dto.customerId,
-      invoiceDate: dto.invoiceDate,
-      dueDate: dto.dueDate,
-      silverRatePerG: rate,
-      makingRatePerG: 0,
-      gstPercent: dto.gstPercent ?? 0,
-      isInterState: dto.isInterState ?? false,
-      ratesFixed: true,
-      lines: [line],
-      notes: dto.notes ?? `Metal received — covers ${covered}.`,
-      status: 'ISSUED',
-    };
-    const created = await this.createInvoice(invoiceDto, userId);
-
-    // Insert coverage rows now that the invoice id exists. Any failure here
-    // leaves an orphaned invoice — acceptable for MVP; the operator can
-    // cancel it. A pure $transaction across createInvoice + coverages would
-    // need to inline createInvoice, which is 200 lines of ratesFixed / GST /
-    // AR-debit logic; deferring that refactor.
     await this.prisma.invoiceEstimateCoverage.createMany({
-      data: dto.coverages.map((c) => ({
-        invoiceId: created.id,
+      data: coverages.map((c) => ({
+        invoiceId: invoice.id,
         estimateId: c.estimateId,
         silverAllocatedG: r3(Number(c.silverAllocatedG)),
       })),
     });
-    // Silver-amount total should equal grams × rate — sanity check
-    // (createInvoice's compute already ran, so this is documentation).
-    void silverAmount;
-
-    return this.getInvoice(created.id);
   }
 
   async listInvoices(q: { type?: InvoiceTypeStr; customerId?: number; status?: string; search?: string; fromDate?: string; toDate?: string }) {

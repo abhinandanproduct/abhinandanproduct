@@ -121,6 +121,17 @@ export class CreateInvoiceDto {
   @IsOptional() @IsNumber() @Min(0) totalWeightG?: number;
   // Free-text purpose for delivery challans — "Plating", "Casting" etc.
   @IsOptional() @IsString() @MaxLength(120) purpose?: string;
+  // TAX_INVOICE only: which of the customer's OPEN/PARTIAL estimates this
+  // invoice's silver line covers, and how many grams to each. Backend
+  // validates Σ(alloc) ≤ each estimate's remaining silver need, and Σ
+  // total ≤ this invoice's silver-line grams.
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => InvoiceCoverageDto)
+  coverages?: InvoiceCoverageDto[];
+}
+
+export class InvoiceCoverageDto {
+  @IsInt() estimateId!: number;
+  @IsNumber() @Min(0) silverAllocatedG!: number;
 }
 
 // ---------- Payment ----------

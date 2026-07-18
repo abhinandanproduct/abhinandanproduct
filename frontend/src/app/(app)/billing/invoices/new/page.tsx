@@ -14,6 +14,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { Spinner } from '@/components/ui/spinner';
 import { QuickAddCustomer } from '@/components/shared/quick-add-customer';
+import { Dialog } from '@/components/ui/dialog';
 
 type LineRow = {
   _k: number;
@@ -134,11 +135,50 @@ export default function NewInvoicePage() {
   // level; charges sum into chargesTotal which adds to subtotal pre-GST.
   const [laborDiscountPercent, setLaborDiscountPercent] = React.useState('');
   const [charges, setCharges] = React.useState<Array<{ _k: number; chargeTypeId: number | ''; label: string; amount: string }>>([]);
+  // Estimate coverages — only meaningful for TAX_INVOICE with a "Mixed
+  // Silver Jewellery" line. Map from estimateId → grams string. Populated
+  // via the coverage-picker dialog reachable from the header field.
+  const [coverages, setCoverages] = React.useState<Record<number, string>>({});
+  const [coverageOpen, setCoverageOpen] = React.useState(false);
 
   const customersQ = useQuery<any[]>({
     queryKey: ['customers'],
     queryFn: () => Api.billing.customers(),
   });
+
+  // Customer's OPEN/PARTIAL estimates — pulled ONLY when TAX_INVOICE +
+  // customer selected, so quotes / challans / credit-notes don't fire
+  // the extra request. Backend returns summary.silverStatus which we use
+  // to hide already-CLOSED estimates from the picker.
+  const openEstimatesQ = useQuery<any[]>({
+    queryKey: ['open-estimates', customerId, type],
+    queryFn: () => Api.billing.invoices({ type: 'QUOTE', customerId: Number(customerId) }),
+    enabled: !!customerId && type === 'TAX_INVOICE',
+  });
+  const openEstimates = (openEstimatesQ.data ?? []).filter(
+    (e: any) => e.status !== 'CANCELLED' && (e.summary?.silverStatus ?? 'OPEN') !== 'CLOSED',
+  );
+
+  // "Mixed Silver Jewellery" line detection — trigger for the coverage
+  // field. Any line whose itemNumber or description names the special
+  // consolidated silver item counts.
+  const hasMixedSilverLine = React.useMemo(() =>
+    lines.some((l) =>
+      l.itemNumber === 'Mixed Silver Jewellery' ||
+      /mixed\s+silver/i.test(l.description ?? '')
+    ),
+  [lines]);
+  const showCoverageField = type === 'TAX_INVOICE' && !!customerId && hasMixedSilverLine;
+  const coverageTotals = React.useMemo(() => {
+    const entries = Object.entries(coverages)
+      .filter(([, v]) => Number(v) > 0)
+      .map(([id, v]) => ({ estimateId: Number(id), grams: Number(v) }));
+    return { count: entries.length, grams: entries.reduce((s, e) => s + e.grams, 0), entries };
+  }, [coverages]);
+
+  // Reset coverages when customer or type changes — stale selection would
+  // point at the wrong customer's estimates.
+  React.useEffect(() => { setCoverages({}); }, [customerId, type]);
 
   // Whenever the picked customer changes AND the operator hasn't hand-
   // edited Place of Supply, seed it from customer.state (with stateCode
@@ -450,6 +490,12 @@ export default function NewInvoicePage() {
             label: c.label || undefined,
             amount: Number(c.amount),
           })),
+        coverages: showCoverageField && coverageTotals.entries.length
+          ? coverageTotals.entries.map((e) => ({
+              estimateId: e.estimateId,
+              silverAllocatedG: e.grams,
+            }))
+          : undefined,
       };
       return isEdit && editId != null
         ? Api.billing.updateInvoice(editId, body)
@@ -607,6 +653,21 @@ export default function NewInvoicePage() {
               <option value="IGST">IGST (inter-state)</option>
             </select>
           </Field>
+          {showCoverageField && (
+            <Field label="Estimates covered"
+              hint="Which estimates does this invoice's silver settle. Opens a picker with the customer's OPEN/PARTIAL estimates.">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-9 justify-start"
+                onClick={() => setCoverageOpen(true)}
+              >
+                {coverageTotals.count === 0
+                  ? 'Select estimates…'
+                  : `${coverageTotals.count} estimate${coverageTotals.count === 1 ? '' : 's'} · ${coverageTotals.grams.toFixed(3)} g`}
+              </Button>
+            </Field>
+          )}
         </CardContent>
       </Card>
 
@@ -1063,7 +1124,116 @@ export default function NewInvoicePage() {
           </div>
         </CardContent>
       </Card>
+
+      {showCoverageField && (
+        <CoveragePickerDialog
+          open={coverageOpen}
+          estimates={openEstimates}
+          value={coverages}
+          onClose={() => setCoverageOpen(false)}
+          onSave={(next) => { setCoverages(next); setCoverageOpen(false); }}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * Coverage picker — modal listing the customer's OPEN/PARTIAL estimates
+ * with a grams input per row. "Auto-fill" button drops the running silver
+ * total across the still-uncovered estimates until the invoice's Mixed
+ * Silver Jewellery grams are exhausted (FIFO by estimate id, matches the
+ * ordering the estimate list uses).
+ */
+function CoveragePickerDialog({
+  open, estimates, value, onClose, onSave,
+}: {
+  open: boolean;
+  estimates: any[];
+  value: Record<number, string>;
+  onClose: () => void;
+  onSave: (next: Record<number, string>) => void;
+}) {
+  const [local, setLocal] = React.useState<Record<number, string>>(value);
+  React.useEffect(() => { if (open) setLocal(value); }, [open, value]);
+
+  const total = Object.values(local).reduce((s, v) => s + (Number(v) || 0), 0);
+  const overRows = estimates.some((e) => {
+    const req   = Number(e.summary?.silverRequiredG  ?? 0);
+    const done  = Number(e.summary?.silverAllocatedG ?? 0);
+    const remain = Math.max(0, req - done);
+    const cur   = Number(local[e.id] || 0);
+    return cur > remain + 0.0005;
+  });
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      size="lg"
+      title="Estimates Covered"
+      description="How many grams of this invoice's silver settle each of the customer's open estimates. Backend rejects any row that exceeds its remaining need."
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => onSave(local)} disabled={overRows}>
+            Save · {total.toFixed(3)} g
+          </Button>
+        </>
+      }
+    >
+      {estimates.length === 0 ? (
+        <div className="rounded border border-warning/40 bg-warning/10 px-3 py-3 text-sm text-warning">
+          This customer has no OPEN or PARTIAL estimates. Nothing to cover.
+        </div>
+      ) : (
+        <div className="table-scroll">
+          <table className="w-full text-sm">
+            <thead className="bg-secondary/30 text-left text-xs text-muted-foreground">
+              <tr>
+                <th className="px-3 py-2">Estimate</th>
+                <th className="px-3 py-2 text-right">Required g</th>
+                <th className="px-3 py-2 text-right">Already alloc.</th>
+                <th className="px-3 py-2 text-right">Remaining</th>
+                <th className="px-3 py-2 text-right">Cover g</th>
+              </tr>
+            </thead>
+            <tbody>
+              {estimates.map((e) => {
+                const req    = Number(e.summary?.silverRequiredG  ?? 0);
+                const done   = Number(e.summary?.silverAllocatedG ?? 0);
+                const remain = Math.max(0, req - done);
+                const cur    = Number(local[e.id] || 0);
+                const over   = cur > remain + 0.0005;
+                return (
+                  <tr key={e.id} className="border-t border-border">
+                    <td className="px-3 py-2 font-semibold">{e.invoiceNumber}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-xs">{req.toFixed(3)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-xs">{done.toFixed(3)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-xs text-warning">{remain.toFixed(3)}</td>
+                    <td className="px-3 py-2 text-right">
+                      <Input
+                        type="number" step="0.001" min="0" max={remain}
+                        value={local[e.id] ?? ''}
+                        onChange={(ev) => setLocal((r) => ({ ...r, [e.id]: ev.target.value }))}
+                        placeholder="0.000"
+                        className={`h-8 w-24 text-right ${over ? 'border-destructive' : ''}`}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-border bg-secondary/30 font-semibold">
+                <td colSpan={4} className="px-3 py-2 text-right">Total covered</td>
+                <td className="px-3 py-2 text-right tabular-nums">{total.toFixed(3)} g</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </Dialog>
   );
 }
 

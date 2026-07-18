@@ -104,26 +104,6 @@ export class BillingController {
     return this.svc.generateTempFromEstimate(id, u?.id);
   }
 
-  // Raise an ABN tax invoice for silver received against selected estimates.
-  // Backend validates ownership + no-over-allocation + positive grams, then
-  // creates the invoice with one consolidated silver line and coverage rows.
-  @Post('metal-invoice')
-  raiseMetalInvoice(
-    @Body() dto: {
-      customerId: number;
-      invoiceDate: string;
-      silverRatePerG: number;
-      coverages: { estimateId: number; silverAllocatedG: number }[];
-      notes?: string;
-      dueDate?: string;
-      gstPercent?: number;
-      isInterState?: boolean;
-    },
-    @CurrentUser() u: AuthUser,
-  ) {
-    return this.svc.raiseMetalInvoice(dto, u?.id);
-  }
-
   // PDF — anonymous so the print-window can pull without bouncing through auth.
   // The id namespace is the same as the secured endpoint.
   @Public()
