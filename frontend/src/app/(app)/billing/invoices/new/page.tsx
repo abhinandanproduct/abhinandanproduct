@@ -183,8 +183,10 @@ export default function NewInvoicePage() {
   }, [coverages]);
 
   // Reset coverages when customer or type changes — stale selection would
-  // point at the wrong customer's estimates.
-  React.useEffect(() => { setCoverages({}); }, [customerId, type]);
+  // point at the wrong customer's estimates. Skipped in edit mode so the
+  // seed effect (below) that pre-fills coverages from the existing invoice
+  // doesn't get wiped when the seeded customer id arrives one render later.
+  React.useEffect(() => { if (!isEdit) setCoverages({}); }, [customerId, type, isEdit]);
 
   // Whenever the picked customer changes AND the operator hasn't hand-
   // edited Place of Supply, seed it from customer.state (with stateCode
@@ -346,6 +348,18 @@ export default function NewInvoicePage() {
       boxRef: it.boxRef ?? '',
       barcode: it.barcode ?? '',
     })));
+    // Seed the coverage picker from any existing InvoiceEstimateCoverage
+    // rows on the invoice being edited. Without this the picker starts
+    // blank on Edit and saving would wipe the coverages the operator
+    // had previously chosen.
+    const covs = (editQ.data as any).coverages ?? [];
+    if (covs.length) {
+      const next: Record<number, string> = {};
+      for (const c of covs) {
+        next[Number(c.estimateId)] = String(Number(c.silverAllocatedG).toFixed(3));
+      }
+      setCoverages(next);
+    }
   }, [isEdit, editQ.data]);
   const qcc = useQueryClient();
   const newChargeType = useMutation({

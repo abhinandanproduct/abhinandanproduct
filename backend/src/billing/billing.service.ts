@@ -1358,6 +1358,37 @@ export class BillingService {
       }
     }
 
+    // Estimate coverages — TAX_INVOICE only. Replace the full set on
+    // every edit so the operator can add / remove / re-weight rows in
+    // one save. Fetch the fresh invoice+items first so the helper's
+    // silver-cap guard runs against the just-edited grams, not the
+    // pre-edit snapshot.
+    if (dto.type === 'TAX_INVOICE') {
+      await this.prisma.invoiceEstimateCoverage.deleteMany({ where: { invoiceId: id } });
+      if ((dto as any).coverages?.length) {
+        const withItems = await this.prisma.invoice.findUnique({
+          where: { id },
+          include: { items: { select: { quantity: true, weightG: true, itemNumber: true } } },
+        });
+        try {
+          await this.insertInvoiceCoverages(
+            {
+              id: withItems!.id,
+              customerId: withItems!.customerId,
+              invoiceNumber: withItems!.invoiceNumber,
+              items: withItems!.items,
+            },
+            (dto as any).coverages,
+          );
+        } catch (e) {
+          // Bubble up — the delete already ran, but the rest of the
+          // edit committed cleanly and we've just cleared the old
+          // coverages. Operator sees the validation error and can retry.
+          throw e;
+        }
+      }
+    }
+
     return this.getInvoice(id);
   }
 
