@@ -97,6 +97,21 @@ const newRow = (): LineRow => ({
   barcode: '',
 });
 
+// A special line that pools the "additional charges" the operator ticked
+// on the coverage picker. Description "Other Charges" is the marker used
+// to find and replace this line on subsequent picker saves.
+const OTHER_CHARGES_DESC = 'Other Charges';
+const isOtherChargesRow = (l: { description?: string }) =>
+  (l.description ?? '').trim().toLowerCase() === OTHER_CHARGES_DESC.toLowerCase();
+const newOtherChargesRow = (amount: number): LineRow => ({
+  ...newRow(),
+  description: OTHER_CHARGES_DESC,
+  hsnCode: '',
+  quantity: '1',
+  weightG: '',
+  extraAmount: amount.toFixed(2),
+});
+
 export default function NewInvoicePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -314,12 +329,11 @@ export default function NewInvoicePage() {
     })));
     // Line items — hydrate every field back to string form so the
     // controlled inputs don't NaN-out.
-    // Filter out the synthesized "Other Charges" line — that row is
-    // controlled from the coverage picker's include-toggles, not the
-    // regular line editor. Backend re-inserts it on every save based on
-    // the current toggles.
+    // "Other Charges" line (from the coverage picker's Include toggles)
+    // is a normal, editable invoice line now — no filtering. Just seed
+    // it back like any other row so the operator can tweak its qty or
+    // amount from the line editor.
     setLines(((inv.items ?? []) as any[])
-      .filter((it: any) => it.itemNumber !== '__OTHER_CHARGES__')
       .map((it: any): LineRow => ({
       _k: Math.random(),
       itemId: it.itemId ?? '',
@@ -1183,7 +1197,24 @@ export default function NewInvoicePage() {
           estimates={openEstimates}
           value={coverages}
           onClose={() => setCoverageOpen(false)}
-          onSave={(next) => { setCoverages(next); setCoverageOpen(false); }}
+          onSave={(next) => {
+            setCoverages(next);
+            setCoverageOpen(false);
+            // Sum every toggled estimate's Additional Charges total,
+            // then materialize that as a plain "Other Charges" line the
+            // operator can see + edit qty on. Replaces any earlier
+            // "Other Charges" row so switching toggles never doubles.
+            const total = Object.entries(next).reduce((s, [id, entry]) => {
+              if (!entry.include) return s;
+              const est = openEstimates.find((e: any) => e.id === Number(id));
+              return s + Number(est?.summary?.otherChargesAmt ?? 0);
+            }, 0);
+            setLines((prev) => {
+              const cleaned = prev.filter((l) => !isOtherChargesRow(l));
+              if (total > 0) cleaned.push(newOtherChargesRow(total));
+              return cleaned;
+            });
+          }}
         />
       )}
     </div>
