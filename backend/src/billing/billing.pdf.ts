@@ -334,6 +334,13 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
   const halfPct = gstPct / 2;
   const showTaxCols = inv.type !== 'DELIVERY_CHALLAN' && gstPct > 0;
   const isInter = inv.isInterState;
+  // Compact rate for column headers — strip trailing zeros so "1.50%"
+  // reads as "1.5%" and "3.00%" reads as "3%". Keeps the label short
+  // enough to fit on a single line inside the tax header cells.
+  const fmtPct = (n: number) => {
+    const s = n.toFixed(2);
+    return s.replace(/\.?0+$/, '');
+  };
   // Portrait invoices (TAX/TEMP) drop the inline GST band from the table
   // per operator spec — Silver /g + Making /g rates take those slots,
   // and the GST breakdown lives only in the totals-box below the table.
@@ -397,9 +404,9 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
               { label: 'Making',             w: 78,  align: 'right'  },
               { label: 'Addl Chrg',          w: 58,  align: 'right'  },
               { label: 'S + M + A',          w: 78,  align: 'right'  },
-              { label: `IGST ${gstPct.toFixed(1)}%`, w: 66,  align: 'right'  },
-              { label: 'Amount',             w: 94,  align: 'right'  },
-              // sum: 18+80+38+24+44+48+42+48+78+78+58+78+66+94 = 794
+              { label: `IGST ${fmtPct(gstPct)}%`, w: 68,  align: 'right'  },
+              { label: 'Amount',             w: 92,  align: 'right'  },
+              // sum: 18+80+38+24+44+48+42+48+78+78+58+78+68+92 = 794
             ]
         : compactMoneyCols
           ? [
@@ -444,10 +451,10 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
               { label: 'Making',             w: 78, align: 'right'  },
               { label: 'Addl Chrg',          w: 56, align: 'right'  },
               { label: 'S + M + A',          w: 78, align: 'right'  },
-              { label: `CGST ${halfPct.toFixed(2)}%`, w: 54, align: 'right' },
-              { label: `SGST ${halfPct.toFixed(2)}%`, w: 54, align: 'right' },
-              { label: 'Amount',             w: 82, align: 'right'  },
-              // sum: 18+64+32+22+42+48+40+48+78+78+56+78+54+54+82 = 794
+              { label: `CGST ${fmtPct(halfPct)}%`, w: 56, align: 'right' },
+              { label: `SGST ${fmtPct(halfPct)}%`, w: 56, align: 'right' },
+              { label: 'Amount',             w: 78, align: 'right'  },
+              // sum: 18+64+32+22+42+48+40+48+78+78+56+78+56+56+78 = 794
             ]
       : [
           // No-tax layout (13 cols · 794pt). Extra headroom on money
