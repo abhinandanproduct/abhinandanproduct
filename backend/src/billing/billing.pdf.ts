@@ -1006,20 +1006,29 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
   }
   // Coverages: one bulleted line per estimate this metal invoice settles,
   // with a "(partial — Xg of Yg, Zg still pending)" tail for anything not
-  // fully closed by the running sum of coverages this estimate has seen.
+  // fully closed at the moment this invoice was saved (snapshot values —
+  // later invoices covering the same estimate never mutate what this ABN
+  // prints).
+  //
+  // Uses the full inner width and measures each bullet's rendered height
+  // with heightOfString() before advancing y, so long lines don't overlap
+  // the next bullet.
   if (inv.coverages && inv.coverages.length) {
     const coversY = y + (inv.notes ? 92 : 52);
     doc.fillColor('#000000').font('Helvetica-Bold').fontSize(10)
        .text('Silver received against', M, coversY, { lineBreak: false });
     doc.fillColor('#000000').font('Helvetica').fontSize(9);
+    const bulletW = innerW; // full width; totals box is above this section
     let ly = coversY + 16;
     for (const c of inv.coverages) {
       const isPartial = c.status === 'PARTIAL';
       const label = isPartial
         ? `${c.estimateNumber} — ${c.silverAllocatedG.toFixed(3)} g (partial — ${c.allocatedG.toFixed(3)} g of ${c.requiredG.toFixed(3)} g, ${c.remainingG.toFixed(3)} g still pending)`
         : `${c.estimateNumber} — ${c.silverAllocatedG.toFixed(3)} g (closed)`;
-      doc.text(`• ${label}`, M, ly, { width: innerW - tboxW - 20 });
-      ly += 12;
+      const bulletText = `• ${label}`;
+      const h = doc.heightOfString(bulletText, { width: bulletW });
+      doc.text(bulletText, M, ly, { width: bulletW });
+      ly += h + 2;
     }
   }
 

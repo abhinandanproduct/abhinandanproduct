@@ -1895,6 +1895,14 @@ model InvoiceEstimateCoverage {
   // over its line items rolls into the ABN's "Other Charges" synthesized
   // line. Kept per-coverage so re-editing shows the same boxes ticked.
   includeOtherCharges   Boolean  @default(false) @map("include_other_charges")
+  // Snapshot of the estimate's silver-status at the moment this coverage
+  // was saved. The PDF prints from these values so a later invoice that
+  // finishes off an estimate never mutates what an earlier invoice shows
+  // when reprinted. Nullable so pre-existing rows keep working.
+  snapshotRequiredG     Decimal? @map("snapshot_required_g")  @db.Decimal(12, 3)
+  snapshotAllocatedG    Decimal? @map("snapshot_allocated_g") @db.Decimal(12, 3)
+  snapshotRemainingG    Decimal? @map("snapshot_remaining_g") @db.Decimal(12, 3)
+  snapshotStatus        String?  @map("snapshot_status") @db.VarChar(16)
   createdAt             DateTime @default(now()) @map("created_at")
 
   invoice   Invoice @relation("MetalInvoiceCoverages", fields: [invoiceId], references: [id], onDelete: Cascade)

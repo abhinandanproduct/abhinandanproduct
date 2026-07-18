@@ -926,13 +926,48 @@ export class BillingService {
       }
     }
 
+    // Compute a snapshot of each estimate's silver-status AT SAVE TIME so
+    // the PDF prints the same numbers even after other invoices close the
+    // remaining shortfall. Uses `already` (from the earlier validation
+    // loop) + the coverage grams to derive the frozen picture.
+    const snapshots = new Map<number, {
+      requiredG: number; allocatedG: number; remainingG: number; status: string;
+    }>();
+    for (const cov of coverages as any[]) {
+      const est = byId.get(cov.estimateId)!;
+      const derivedWt = est.items.reduce(
+        (s: number, it: any) => s + Number(it.quantity ?? 0) * Number(it.weightG ?? 0),
+        0,
+      );
+      const required = r3(
+        est.totalWeightG != null && Number(est.totalWeightG) > 0
+          ? Number(est.totalWeightG)
+          : derivedWt,
+      );
+      const already = r3(est.coveredBy.reduce((s: number, c: any) => s + Number(c.silverAllocatedG), 0));
+      const g = Number(cov.silverAllocatedG ?? 0);
+      const allocated = r3(already + g);
+      const remaining = r3(Math.max(0, required - allocated));
+      const status =
+        allocated <= 0                    ? 'OPEN'
+        : allocated + 0.0005 >= required  ? 'CLOSED'
+        : 'PARTIAL';
+      snapshots.set(cov.estimateId, { requiredG: required, allocatedG: allocated, remainingG: remaining, status });
+    }
     await this.prisma.invoiceEstimateCoverage.createMany({
-      data: coverages.map((c: any) => ({
-        invoiceId: invoice.id,
-        estimateId: c.estimateId,
-        silverAllocatedG: r3(Number(c.silverAllocatedG)),
-        includeOtherCharges: !!c.includeOtherCharges,
-      })),
+      data: coverages.map((c: any) => {
+        const snap = snapshots.get(c.estimateId)!;
+        return {
+          invoiceId: invoice.id,
+          estimateId: c.estimateId,
+          silverAllocatedG: r3(Number(c.silverAllocatedG)),
+          includeOtherCharges: !!c.includeOtherCharges,
+          snapshotRequiredG:  snap.requiredG,
+          snapshotAllocatedG: snap.allocatedG,
+          snapshotRemainingG: snap.remainingG,
+          snapshotStatus:     snap.status,
+        };
+      }),
     });
 
     // Synthesized "Other Charges" line — one row on the invoice items table
@@ -1109,23 +1144,36 @@ export class BillingService {
     // show the amount next to the toggle checkbox.
     const enrichedCoverages = (inv as any).coverages?.map((c: any) => {
       const est = c.estimate;
-      const derivedWt = est.items.reduce(
-        (s: number, it: any) => s + Number(it.quantity ?? 0) * Number(it.weightG ?? 0),
-        0,
-      );
-      const requiredG = r3(
-        est.totalWeightG != null && Number(est.totalWeightG) > 0
-          ? Number(est.totalWeightG)
-          : derivedWt,
-      );
-      const allocatedG = r3(
-        est.coveredBy.reduce((s: number, x: any) => s + Number(x.silverAllocatedG), 0),
-      );
-      const remainingG = r3(Math.max(0, requiredG - allocatedG));
-      const status =
-        allocatedG <= 0                    ? 'OPEN'
-        : allocatedG + 0.0005 >= requiredG ? 'CLOSED'
-        : 'PARTIAL';
+      // Snapshot values were frozen when the coverage was created — the
+      // PDF and any subsequent print MUST reflect what was true then,
+      // never the current live state. Pre-snapshot rows fall back to
+      // live derivation so history stays viewable.
+      const hasSnap = c.snapshotRequiredG != null;
+      let requiredG: number, allocatedG: number, remainingG: number, status: string;
+      if (hasSnap) {
+        requiredG  = Number(c.snapshotRequiredG);
+        allocatedG = Number(c.snapshotAllocatedG);
+        remainingG = Number(c.snapshotRemainingG);
+        status     = c.snapshotStatus ?? 'OPEN';
+      } else {
+        const derivedWt = est.items.reduce(
+          (s: number, it: any) => s + Number(it.quantity ?? 0) * Number(it.weightG ?? 0),
+          0,
+        );
+        requiredG = r3(
+          est.totalWeightG != null && Number(est.totalWeightG) > 0
+            ? Number(est.totalWeightG)
+            : derivedWt,
+        );
+        allocatedG = r3(
+          est.coveredBy.reduce((s: number, x: any) => s + Number(x.silverAllocatedG), 0),
+        );
+        remainingG = r3(Math.max(0, requiredG - allocatedG));
+        status =
+          allocatedG <= 0                    ? 'OPEN'
+          : allocatedG + 0.0005 >= requiredG ? 'CLOSED'
+          : 'PARTIAL';
+      }
       return {
         id: c.id,
         estimateId: c.estimateId,
