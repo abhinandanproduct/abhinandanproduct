@@ -380,25 +380,27 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
               // sum: 18+118+40+28+56+54+54+82+97 = 547
             ]
           : [
-              // Landscape interstate (14 cols · 794pt). % sub-column
-              // removed — rate is baked into the IGST header ("IGST 3%")
-              // per operator spec. Freed width reallocated to Wt/pc and
-              // Item so per-piece values like "476.150" don't truncate.
-              { label: '#',                  w: 20,  align: 'center' },
-              { label: 'Item & Description', w: 90,  align: 'left'   },
-              { label: 'HSN/SAC',            w: 50,  align: 'center' },
-              { label: 'Qty',                w: 26,  align: 'right'  },
-              { label: 'Wt/pc',              w: 46,  align: 'right'  },
-              { label: 'Gross Wt',           w: 48,  align: 'right'  },
+              // Landscape interstate (14 cols · 794pt). Every money column
+              // sized to fit "Rs. 99,99,999.99" (≈82pt @ 9pt Helvetica-
+              // Bold) so per-line silver / making / S+M+A / Amount values
+              // up to a full crore print without ellipsis. Item column
+              // narrows to release the required width; description wraps
+              // to multiple lines as needed.
+              { label: '#',                  w: 18,  align: 'center' },
+              { label: 'Item & Description', w: 76,  align: 'left'   },
+              { label: 'HSN/SAC',            w: 42,  align: 'center' },
+              { label: 'Qty',                w: 24,  align: 'right'  },
+              { label: 'Wt/pc',              w: 44,  align: 'right'  },
+              { label: 'Gross Wt',           w: 46,  align: 'right'  },
               { label: 'Less Wt',            w: 42,  align: 'right'  },
-              { label: 'Net Wt',             w: 48,  align: 'right'  },
-              { label: 'Silver',             w: 72,  align: 'right'  },
-              { label: 'Making',             w: 68,  align: 'right'  },
-              { label: 'Addl Chrg',          w: 58,  align: 'right'  },
-              { label: 'S + M + A',          w: 74,  align: 'right'  },
-              { label: `IGST ${gstPct.toFixed(1)}%`, w: 66,  align: 'right'  },
-              { label: 'Amount',             w: 86,  align: 'right'  },
-              // sum: 20+90+50+26+46+48+42+48+72+68+58+74+66+86 = 794
+              { label: 'Net Wt',             w: 46,  align: 'right'  },
+              { label: 'Silver',             w: 82,  align: 'right'  },
+              { label: 'Making',             w: 82,  align: 'right'  },
+              { label: 'Addl Chrg',          w: 60,  align: 'right'  },
+              { label: 'S + M + A',          w: 82,  align: 'right'  },
+              { label: `IGST ${gstPct.toFixed(1)}%`, w: 70,  align: 'right'  },
+              { label: 'Amount',             w: 80,  align: 'right'  },
+              // sum: 18+76+42+24+44+46+42+46+82+82+60+82+70+80 = 794
             ]
         : compactMoneyCols
           ? [
@@ -424,28 +426,30 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
               // sum: 18+118+40+28+56+54+54+82+97 = 547
             ]
           : [
-              // Landscape intra-state (15 cols · 794pt). CGST/SGST %
-              // sub-columns removed — rate is baked into the header
-              // labels ("CGST 1.5%", "SGST 1.5%") per operator spec.
-              // 64pt of freed width redistributed: Wt/pc grows so
-              // per-piece values print in full, Item column widens so
-              // description doesn't crush.
-              { label: '#',                  w: 20, align: 'center' },
-              { label: 'Item & Description', w: 66, align: 'left'   },
-              { label: 'HSN/SAC',            w: 40, align: 'center' },
-              { label: 'Qty',                w: 24, align: 'right'  },
-              { label: 'Wt/pc',              w: 44, align: 'right'  },
-              { label: 'Gross Wt',           w: 48, align: 'right'  },
-              { label: 'Less Wt',            w: 44, align: 'right'  },
-              { label: 'Net Wt',             w: 48, align: 'right'  },
-              { label: 'Silver',             w: 62, align: 'right'  },
-              { label: 'Making',             w: 62, align: 'right'  },
+              // Landscape intra-state (15 cols · 794pt). Every money
+              // column sized to fit "Rs. 99,99,999.99" (≈82pt @ 9pt
+              // Helvetica-Bold) so silver / making / S+M+A / Amount
+              // values up to a full crore print without ellipsis. The
+              // "Rs. 1,17,20…" truncation reported by operator on
+              // 8-digit totals is fixed by this wider silver column.
+              // Item column narrows to release the required width;
+              // description wraps to multiple lines when needed.
+              { label: '#',                  w: 18, align: 'center' },
+              { label: 'Item & Description', w: 48, align: 'left'   },
+              { label: 'HSN/SAC',            w: 36, align: 'center' },
+              { label: 'Qty',                w: 22, align: 'right'  },
+              { label: 'Wt/pc',              w: 40, align: 'right'  },
+              { label: 'Gross Wt',           w: 44, align: 'right'  },
+              { label: 'Less Wt',            w: 40, align: 'right'  },
+              { label: 'Net Wt',             w: 44, align: 'right'  },
+              { label: 'Silver',             w: 82, align: 'right'  },
+              { label: 'Making',             w: 82, align: 'right'  },
               { label: 'Addl Chrg',          w: 60, align: 'right'  },
-              { label: 'S + M + A',          w: 72, align: 'right'  },
-              { label: `CGST ${halfPct.toFixed(2)}%`, w: 66, align: 'right' },
-              { label: `SGST ${halfPct.toFixed(2)}%`, w: 66, align: 'right' },
-              { label: 'Amount',             w: 72, align: 'right'  },
-              // sum: 20+66+40+24+44+48+44+48+62+62+60+72+66+66+72 = 794
+              { label: 'S + M + A',          w: 82, align: 'right'  },
+              { label: `CGST ${halfPct.toFixed(2)}%`, w: 60, align: 'right' },
+              { label: `SGST ${halfPct.toFixed(2)}%`, w: 60, align: 'right' },
+              { label: 'Amount',             w: 76, align: 'right'  },
+              // sum: 18+48+36+22+40+44+40+44+82+82+60+82+60+60+76 = 794
             ]
       : [
           // No-tax layout (13 cols · 794pt). Extra headroom on money
