@@ -407,29 +407,28 @@ export default function NewInvoicePage() {
   });
 
   const totals = React.useMemo(() => {
-    // Same math as the per-row Amount cell:
-    //   wt × (silver + making) + addl-per-pc × qty
-    // Using totalWtG when the operator typed it avoids the 33.333 × 60
-    // = 1999.98 drift caused by re-multiplying a rounded per-piece weight.
-    // Include additionalPerPc × qty so charge-only lines (delivery fee,
-    // rework labor) actually feed into the subtotal → CGST/SGST calc.
-    const lineSub = lines.reduce((s, l) => {
-      const wt = l.totalWtG
+    // Per operator spec: silver + making apply to NET weight (Total
+    // Gross - Less). totalWtG (when set) represents the GROSS line total
+    // override; lessWeightG per-piece × qty is subtracted from it.
+    // Additional-per-pc × qty is a separate flat charge on top.
+    const netLineWt = (l: any): number => {
+      const gross = l.totalWtG
         ? Number(l.totalWtG)
         : Number(l.weightG || 0) * Number(l.quantity || 0);
+      const less = Number(l.lessWeightG || 0) * Number(l.quantity || 0);
+      return Math.max(0, gross - less);
+    };
+    const lineSub = lines.reduce((s, l) => {
+      const wt = netLineWt(l);
       const sv = Number(l.silverRatePerG || silverRate || 0);
       const mk = Number(l.makingRatePerG || makingRate || 0);
       const qtyN = Number(l.quantity || 0);
       const addl = Number(l.additionalPerPc || 0) * qtyN;
       return s + wt * (sv + mk) + addl;
     }, 0);
-    // Making total (labor-discount base) — same weight logic; addl is
-    // deliberately NOT included because the discount only applies to
-    // making-charges, not custom line-level extras.
+    // Making total (labor-discount base) — same NET weight logic.
     const makingSub = lines.reduce((s, l) => {
-      const wt = l.totalWtG
-        ? Number(l.totalWtG)
-        : Number(l.weightG || 0) * Number(l.quantity || 0);
+      const wt = netLineWt(l);
       const mk = Number(l.makingRatePerG || makingRate || 0);
       return s + wt * mk;
     }, 0);
@@ -802,11 +801,14 @@ export default function NewInvoicePage() {
               </thead>
               <tbody>
                 {lines.map((l, idx) => {
-                  // Total weight: use the directly-typed totalWtG when set,
-                  // otherwise fall back to per-piece × quantity.
-                  const wt = l.totalWtG
+                  // NET line weight: (Gross line total) − (less/pc × qty).
+                  // Gross line total = totalWtG override when set, else
+                  // weightG × qty. Silver + making rates apply to NET.
+                  const grossLine = l.totalWtG
                     ? Number(l.totalWtG)
                     : Number(l.weightG || 0) * Number(l.quantity || 0);
+                  const lessLine = Number(l.lessWeightG || 0) * Number(l.quantity || 0);
+                  const wt = Math.max(0, grossLine - lessLine);
                   const sv = Number(l.silverRatePerG || silverRate || 0);
                   const mk = Number(l.makingRatePerG || makingRate || 0);
                   // Additional charges are per-piece × qty (flat line total).
@@ -999,17 +1001,21 @@ export default function NewInvoicePage() {
                             <DetailNum row={l} idx={idx} setLines={setLines} field="extraAmount" label="Extra Amount" step="0.01" />
                             <DetailNum row={l} idx={idx} setLines={setLines} field="packetNo" label="Packet No" step="1" />
                           </div>
-                          {/* Derived preview — Net = Gross − Less. Fine and
-                              Wastage Fine dropped along with the Purity and
-                              Wastage inputs. */}
+                          {/* Derived preview — Total Gross, Less, and Net
+                              for the whole line. Silver + making rates
+                              apply to Net (Total Wt = Net Wt per operator
+                              spec). Less/pc × qty gives total less. */}
                           {(() => {
-                            const gross = Number(l.weightG || 0) * Number(l.quantity || 0);
-                            const less = Number(l.lessWeightG || 0);
-                            const net = Math.max(0, gross - less);
+                            const grossLine = l.totalWtG
+                              ? Number(l.totalWtG)
+                              : Number(l.weightG || 0) * Number(l.quantity || 0);
+                            const lessLine = Number(l.lessWeightG || 0) * Number(l.quantity || 0);
+                            const net = Math.max(0, grossLine - lessLine);
                             return (
                               <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-muted-foreground">
-                                <span>Gross = <b className="text-foreground tabular-nums">{gross.toFixed(3)} g</b></span>
-                                <span>Net = <b className="text-foreground tabular-nums">{net.toFixed(3)} g</b></span>
+                                <span>Total Gross = <b className="text-foreground tabular-nums">{grossLine.toFixed(3)} g</b></span>
+                                <span>Less = <b className="text-foreground tabular-nums">{lessLine.toFixed(3)} g</b></span>
+                                <span>Net (Total Wt) = <b className="text-foreground tabular-nums">{net.toFixed(3)} g</b></span>
                               </div>
                             );
                           })()}
@@ -1055,12 +1061,13 @@ export default function NewInvoicePage() {
                       <td className="px-2 py-2"></td>
                       <td className="px-2 py-2 text-right tabular-nums">
                         ₹ {lines.reduce((s, l) => {
-                          // Use the operator-typed total when set, else
-                          // per-piece × qty. Same math as the per-row Amount
-                          // so the TOTAL matches the visible row values.
-                          const wt = l.totalWtG
+                          // NET line weight: (Gross line total) − (less/pc × qty).
+                          // Silver + making apply to NET; matches per-row Amount.
+                          const grossLine = l.totalWtG
                             ? Number(l.totalWtG)
                             : Number(l.weightG || 0) * Number(l.quantity || 0);
+                          const lessLine = Number(l.lessWeightG || 0) * Number(l.quantity || 0);
+                          const wt = Math.max(0, grossLine - lessLine);
                           const sv = Number(l.silverRatePerG || silverRate || 0);
                           const mk = Number(l.makingRatePerG || makingRate || 0);
                           const qtyN = Number(l.quantity || 0);
