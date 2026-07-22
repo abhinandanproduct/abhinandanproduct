@@ -407,28 +407,25 @@ export default function NewInvoicePage() {
   });
 
   const totals = React.useMemo(() => {
-    // Per operator spec: silver + making apply to NET weight (Total
-    // Gross - Less). totalWtG (when set) represents the GROSS line total
-    // override; lessWeightG per-piece × qty is subtracted from it.
-    // Additional-per-pc × qty is a separate flat charge on top.
-    const netLineWt = (l: any): number => {
-      const gross = l.totalWtG
+    // Wt/pc is the NET weight per piece — silver + making rates apply
+    // directly to weightG × qty. Total Gross (weightG + lessWeightG) ×
+    // qty is for display / PDF only, not calc.
+    const lineSub = lines.reduce((s, l) => {
+      const wt = l.totalWtG
         ? Number(l.totalWtG)
         : Number(l.weightG || 0) * Number(l.quantity || 0);
-      const less = Number(l.lessWeightG || 0) * Number(l.quantity || 0);
-      return Math.max(0, gross - less);
-    };
-    const lineSub = lines.reduce((s, l) => {
-      const wt = netLineWt(l);
       const sv = Number(l.silverRatePerG || silverRate || 0);
       const mk = Number(l.makingRatePerG || makingRate || 0);
       const qtyN = Number(l.quantity || 0);
       const addl = Number(l.additionalPerPc || 0) * qtyN;
       return s + wt * (sv + mk) + addl;
     }, 0);
-    // Making total (labor-discount base) — same NET weight logic.
+    // Making total (labor-discount base) — same weight logic; addl
+    // deliberately NOT included (discount applies to making only).
     const makingSub = lines.reduce((s, l) => {
-      const wt = netLineWt(l);
+      const wt = l.totalWtG
+        ? Number(l.totalWtG)
+        : Number(l.weightG || 0) * Number(l.quantity || 0);
       const mk = Number(l.makingRatePerG || makingRate || 0);
       return s + wt * mk;
     }, 0);
@@ -801,14 +798,11 @@ export default function NewInvoicePage() {
               </thead>
               <tbody>
                 {lines.map((l, idx) => {
-                  // NET line weight: (Gross line total) − (less/pc × qty).
-                  // Gross line total = totalWtG override when set, else
-                  // weightG × qty. Silver + making rates apply to NET.
-                  const grossLine = l.totalWtG
+                  // Wt/pc (weightG) is the NET weight per piece — silver
+                  // + making apply directly to weightG × qty.
+                  const wt = l.totalWtG
                     ? Number(l.totalWtG)
                     : Number(l.weightG || 0) * Number(l.quantity || 0);
-                  const lessLine = Number(l.lessWeightG || 0) * Number(l.quantity || 0);
-                  const wt = Math.max(0, grossLine - lessLine);
                   const sv = Number(l.silverRatePerG || silverRate || 0);
                   const mk = Number(l.makingRatePerG || makingRate || 0);
                   // Additional charges are per-piece × qty (flat line total).
@@ -1001,16 +995,19 @@ export default function NewInvoicePage() {
                             <DetailNum row={l} idx={idx} setLines={setLines} field="extraAmount" label="Extra Amount" step="0.01" />
                             <DetailNum row={l} idx={idx} setLines={setLines} field="packetNo" label="Packet No" step="1" />
                           </div>
-                          {/* Derived preview — Total Gross, Less, and Net
-                              for the whole line. Silver + making rates
-                              apply to Net (Total Wt = Net Wt per operator
-                              spec). Less/pc × qty gives total less. */}
+                          {/* Derived preview — Total Gross = Net + Less
+                              per operator spec. Wt/pc IS the net silver-
+                              metal weight per piece (what silver + making
+                              rates apply to). Net (Total Wt) is what the
+                              amount is computed on. Total Gross is
+                              Net + Less, shown for reference. */}
                           {(() => {
-                            const grossLine = l.totalWtG
+                            const qtyN = Number(l.quantity || 0);
+                            const net = l.totalWtG
                               ? Number(l.totalWtG)
-                              : Number(l.weightG || 0) * Number(l.quantity || 0);
-                            const lessLine = Number(l.lessWeightG || 0) * Number(l.quantity || 0);
-                            const net = Math.max(0, grossLine - lessLine);
+                              : Number(l.weightG || 0) * qtyN;
+                            const lessLine = Number(l.lessWeightG || 0) * qtyN;
+                            const grossLine = net + lessLine;
                             return (
                               <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-muted-foreground">
                                 <span>Total Gross = <b className="text-foreground tabular-nums">{grossLine.toFixed(3)} g</b></span>
@@ -1061,13 +1058,10 @@ export default function NewInvoicePage() {
                       <td className="px-2 py-2"></td>
                       <td className="px-2 py-2 text-right tabular-nums">
                         ₹ {lines.reduce((s, l) => {
-                          // NET line weight: (Gross line total) − (less/pc × qty).
-                          // Silver + making apply to NET; matches per-row Amount.
-                          const grossLine = l.totalWtG
+                          // Same math as per-row Amount — Wt/pc is NET.
+                          const wt = l.totalWtG
                             ? Number(l.totalWtG)
                             : Number(l.weightG || 0) * Number(l.quantity || 0);
-                          const lessLine = Number(l.lessWeightG || 0) * Number(l.quantity || 0);
-                          const wt = Math.max(0, grossLine - lessLine);
                           const sv = Number(l.silverRatePerG || silverRate || 0);
                           const mk = Number(l.makingRatePerG || makingRate || 0);
                           const qtyN = Number(l.quantity || 0);
