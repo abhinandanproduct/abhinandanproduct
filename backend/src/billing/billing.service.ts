@@ -193,14 +193,21 @@ export class BillingService {
     const headerSilver = Number(dto.silverRatePerG ?? 0);
     const headerMaking = Number(dto.makingRatePerG ?? 0);
     const lines = dto.lines.map((l: any) => {
-      // Per operator spec: Wt/pc is the NET (silver-metal-only) weight
-      // per piece — what silver + making rates apply to. Total Gross is
-      // Net + Less (for display / PDF only, not for calc). This matches
-      // the operator's real workflow: they weigh the piece, subtract the
-      // stones weight, enter the resulting metal weight as Wt/pc.
-      const weight = Number(l.weightG);
+      // Per operator spec: Total Gross - Less Wt = Net Wt = Total Wt,
+      // and silver + making apply to Net (= Total Wt). Wt/pc is the
+      // per-piece Total Gross weight (with stones/findings); Less Wt is
+      // per-piece deduction; Net Wt is what the amount is computed on.
+      const grossPerPc = Number(l.weightG);
       const qty = Number(l.quantity);
-      const totalWeight = r3(weight * qty);
+      const lessPerPc = Number(l.lessWeightG ?? 0);
+      // Operator-typed line-total override is treated as gross line
+      // total. Falls back to per-pc × qty.
+      const grossLine = l.totalWeightG != null && Number(l.totalWeightG) > 0
+        ? Number(l.totalWeightG)
+        : r3(grossPerPc * qty);
+      const lessLine = r3(lessPerPc * qty);
+      // Net (Total Wt) line total — what silver + making rates apply to.
+      const totalWeight = Math.max(0, r3(grossLine - lessLine));
       // Silver/making are RATES-PER-GRAM — meaningless on a charge-only
       // row (delivery fee, "Other Charges", labor rework). Force both to
       // zero when the row has no weight, regardless of what's in the
