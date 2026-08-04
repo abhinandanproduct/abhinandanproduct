@@ -347,7 +347,9 @@ export function BillingDocList({
       {sorted.length > 0 && (() => {
         const n = (x: any) => Number(x ?? 0);
         const totalAmt   = sorted.reduce((s, r) => s + n(r.totalAmount), 0);
-        const totalBal   = sorted.reduce((s, r) => s + n(r.balanceAmount), 0);
+        // Estimates owe money via their linked tax invoices; other docs owe
+        // their own money balance.
+        const totalBal   = sorted.reduce((s, r) => s + n(isEstimate ? r.summary?.moneyBalanceDue : r.balanceAmount), 0);
         const totalReq   = sorted.reduce((s, r) => s + n(r.summary?.silverRequiredG), 0);
         const totalAlloc = sorted.reduce((s, r) => s + n(r.summary?.silverAllocatedG), 0);
         const totalLeft  = sorted.reduce((s, r) => s + Math.max(0, n(r.summary?.silverRequiredG) - n(r.summary?.silverAllocatedG)), 0);

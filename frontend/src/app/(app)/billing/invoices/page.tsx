@@ -21,6 +21,13 @@ const STATUS_BADGE: Record<string, string> = {
   CANCELLED: 'bg-destructive/15 text-destructive',
 };
 
+// Money-settlement status (making + charges + GST; silver is paid in metal).
+const MONEY_BADGE: Record<string, string> = {
+  OPEN:    'bg-warning/15 text-warning',
+  PARTIAL: 'bg-info/15 text-info',
+  CLOSED:  'bg-success/15 text-success',
+};
+
 export default function InvoicesPage() {
   const qc = useQueryClient();
   const [search, setSearch] = React.useState('');
@@ -115,8 +122,16 @@ export default function InvoicesPage() {
                     <td className="px-4 py-2 text-right font-medium tabular-nums">
                       ₹ {Number(inv.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
-                    <td className="px-4 py-2 text-right tabular-nums text-warning">
-                      ₹ {Number(inv.balanceAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    <td className="px-4 py-2 text-right">
+                      <div className="tabular-nums text-warning">
+                        ₹ {Number(inv.balanceAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </div>
+                      {(inv as any).summary?.moneyStatus && (
+                        <span className={`mt-0.5 inline-block rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider ${MONEY_BADGE[(inv as any).summary.moneyStatus] ?? MONEY_BADGE.OPEN}`}
+                          title="Money settlement (making + charges + GST). Silver is settled in metal.">
+                          {(inv as any).summary.moneyStatus}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-2">
                       <div className="flex justify-end gap-1">

@@ -81,6 +81,7 @@ export class BillingService {
       this.prisma.invoice.findMany({
         where: { customerId, status: { not: 'CANCELLED' } },
         orderBy: { invoiceDate: 'asc' },
+        include: { items: { select: { itemNumber: true, description: true, lineAmount: true } } },
       }),
       this.prisma.payment.findMany({
         where: { customerId },
@@ -103,7 +104,9 @@ export class BillingService {
     let opening = 0;
     const inWindow: Row[] = [];
     for (const i of invoices) {
-      const amt = i.type === 'DELIVERY_CHALLAN' ? 0 : Number(i.totalAmount);
+      // Debit the MONEY owed (total − mixed-silver line), since the silver is
+      // the customer's own metal. Challans carry no money.
+      const amt = i.type === 'DELIVERY_CHALLAN' ? 0 : this.moneyOwedOf(i as any);
       const dt  = new Date(i.invoiceDate);
       if (from && dt < from) { opening = r2(opening + amt); continue; }
       if (to && dt > to)     continue;
@@ -288,11 +291,23 @@ export class BillingService {
     const preRound = r2(subtotal + cgst + sgst + igst);
     const total = Math.round(preRound);
     const roundOff = r2(total - preRound);
+    // Metal-settled portion (₹) = the "Mixed Silver Jewellery" line(s). Per
+    // operator spec these are paid in METAL, not money — so the MONEY owed on
+    // the invoice = total − mixedSilverAmount (all Other Charges + all GST
+    // land on the money side). Zero for ordinary invoices (no mixed line),
+    // so money owed = total, i.e. behaviour is unchanged for them.
+    const mixedSilverAmount = r2(
+      lines
+        .filter((l: any) => /mixed\s*silver/i.test(`${l.itemNumber ?? ''} ${l.description ?? ''}`))
+        .reduce((s: number, l: any) => s + Number(l.lineAmount ?? 0), 0),
+    );
+    const moneyOwed = r2(Math.max(0, total - mixedSilverAmount));
     return {
       lines, subtotal, gstPct, interState,
       cgst, sgst, igst, roundOff, total,
       isChallan, isEstimate,
       laborDiscountPct, laborDiscount, chargesTotal,
+      mixedSilverAmount, moneyOwed,
     };
   }
 
@@ -416,7 +431,10 @@ export class BillingService {
         roundOff: c.roundOff,
         totalAmount: c.total,
         paidAmount: 0,
-        balanceAmount: c.isChallan ? 0 : c.total,
+        // balanceAmount tracks the MONEY balance (making + charges + GST) —
+        // the silver is settled in metal, so it's excluded. Ordinary invoices
+        // have no mixed-silver line, so moneyOwed == total (unchanged).
+        balanceAmount: c.isChallan ? 0 : c.moneyOwed,
         notes: dto.notes ?? null,
         totalWeightG: dto.totalWeightG != null ? dto.totalWeightG : null,
         purpose: dto.purpose ?? null,
@@ -559,7 +577,9 @@ export class BillingService {
           dto.type === 'CREDIT_NOTE' ||
           dto.type === 'ESTIMATE');
       if (affectsAR) {
-        const delta = dto.type === 'CREDIT_NOTE' ? -c.total : c.total;
+        // AR is MONEY only — the silver is the customer's own metal, so
+        // moneyOwed (total − mixed-silver line) hits the receivable, not total.
+        const delta = dto.type === 'CREDIT_NOTE' ? -c.moneyOwed : c.moneyOwed;
         await tx.customer.update({
           where: { id: dto.customerId! },
           data: { balance: { increment: delta } },
@@ -1008,6 +1028,26 @@ export class BillingService {
     }, 0);
   }
 
+  /**
+   * ₹ value of the "Mixed Silver Jewellery" line(s) on an invoice — the part
+   * settled in METAL, so it's excluded from the money receivable. Money owed =
+   * totalAmount − this. Zero for ordinary invoices (no mixed-silver line).
+   */
+  private mixedSilverAmountOfItems(
+    items: Array<{ itemNumber?: any; description?: any; lineAmount?: any }>,
+  ): number {
+    return r2(
+      (items ?? [])
+        .filter((it) => /mixed\s*silver/i.test(`${it.itemNumber ?? ''} ${it.description ?? ''}`))
+        .reduce((s, it) => s + Number(it.lineAmount ?? 0), 0),
+    );
+  }
+
+  /** Money owed on an invoice = total − mixed-silver (metal) portion. */
+  private moneyOwedOf(inv: { totalAmount: any; items: Array<{ itemNumber?: any; description?: any; lineAmount?: any }> }): number {
+    return r2(Math.max(0, Number(inv.totalAmount) - this.mixedSilverAmountOfItems(inv.items)));
+  }
+
   async listInvoices(q: { type?: InvoiceTypeStr; customerId?: number; status?: string; search?: string; fromDate?: string; toDate?: string }) {
     const where: Prisma.InvoiceWhereInput = {};
     if (q.type) where.type = q.type as any;
@@ -1032,7 +1072,7 @@ export class BillingService {
         // Pull extraAmount when the list is estimates so the coverage-
         // picker gets each row's "Other Charges" (additional only) total
         // for free.
-        items: { select: { quantity: true, weightG: true, totalWeightG: true, lessWeightG: true, extraAmount: true } },
+        items: { select: { quantity: true, weightG: true, totalWeightG: true, lessWeightG: true, extraAmount: true, itemNumber: true, description: true, lineAmount: true } },
       },
       // Sort by invoice number ascending — every list is already filtered
       // to one type, so the alphabetic sort keeps the sequence in numeric
@@ -1057,6 +1097,36 @@ export class BillingService {
       });
       for (const g of groups) {
         allocByEstimate.set(g.estimateId, Number(g._sum.silverAllocatedG ?? 0));
+      }
+    }
+
+    // Money "Balance due" per estimate = Σ money balance of the tax invoices
+    // that cover it (invoice.balanceAmount is the money balance). Lets the
+    // estimate list show how much money is still owed on its billing.
+    const moneyDueByEstimate = new Map<number, number>();
+    if (isEstimateList && invoiceIds.length) {
+      const covs = await this.prisma.invoiceEstimateCoverage.findMany({
+        where: { estimateId: { in: invoiceIds } },
+        select: {
+          estimateId: true,
+          invoice: {
+            select: {
+              totalAmount: true, paidAmount: true, status: true,
+              items: { select: { itemNumber: true, description: true, lineAmount: true } },
+            },
+          },
+        },
+      });
+      for (const c of covs) {
+        if (!c.invoice || c.invoice.status === 'CANCELLED') continue;
+        // Compute the money balance live (moneyOwed − paid) so invoices created
+        // before the money model still report correctly, without a backfill.
+        const moneyOwed = this.moneyOwedOf(c.invoice as any);
+        const moneyBal = Math.max(0, moneyOwed - Number(c.invoice.paidAmount ?? 0));
+        moneyDueByEstimate.set(
+          c.estimateId,
+          (moneyDueByEstimate.get(c.estimateId) ?? 0) + moneyBal,
+        );
       }
     }
 
@@ -1088,6 +1158,27 @@ export class BillingService {
         summary.silverAllocatedG = allocated;
         summary.silverStatus     = status;
         summary.otherChargesAmt  = this.otherChargesTotalFromItems(items as any);
+        // Money owed on this estimate's billing = Σ money balance of the tax
+        // invoices covering it. Drives the "Balance due" summary tile.
+        summary.moneyBalanceDue  = Math.round((moneyDueByEstimate.get(inv.id) ?? 0) * 100) / 100;
+      } else {
+        // Invoice money position — silver is settled in metal, so money owed
+        // excludes the mixed-silver line. moneyStatus mirrors the silver
+        // OPEN/PARTIAL/CLOSED so the list can badge money settlement.
+        const mixedSilver = this.mixedSilverAmountOfItems(items as any);
+        const moneyOwed = Math.round(Math.max(0, Number(inv.totalAmount) - mixedSilver) * 100) / 100;
+        const paid = Number(inv.paidAmount ?? 0);
+        // Live money balance (moneyOwed − paid) so pre-money-model invoices
+        // report correctly without a data backfill.
+        const moneyBalance = Math.round(Math.max(0, moneyOwed - paid) * 100) / 100;
+        summary.mixedSilverAmount = mixedSilver;
+        summary.moneyOwed = moneyOwed;
+        summary.moneyPaid = Math.round(paid * 100) / 100;
+        summary.moneyBalance = moneyBalance;
+        summary.moneyStatus =
+          paid <= 0.005 ? 'OPEN'
+          : moneyBalance <= 0.005 ? 'CLOSED'
+          : 'PARTIAL';
       }
       return { ...rest, summary };
     });
@@ -1283,11 +1374,15 @@ export class BillingService {
       src.type === 'CREDIT_NOTE' || src.type === 'ESTIMATE';
     const wasAffectingAR = typeAffectsAR && src.status !== 'DRAFT' && src.customerId != null;
     const nowAffectsAR = typeAffectsAR && newStatus !== 'DRAFT' && effectiveCustomerId != null;
+    // AR is money-only. Reverse the money previously owed (balanceAmount == the
+    // money balance; edits are blocked once anything is paid, so it equals the
+    // full moneyOwed), and post the new moneyOwed. Old invoices posted at full
+    // total self-correct here to money-only on their next save.
     const oldDelta = wasAffectingAR
-      ? (src.type === 'CREDIT_NOTE' ? -Number(src.totalAmount) : Number(src.totalAmount))
+      ? (src.type === 'CREDIT_NOTE' ? -Number(src.balanceAmount) : Number(src.balanceAmount))
       : 0;
     const newDelta = nowAffectsAR
-      ? (src.type === 'CREDIT_NOTE' ? -c.total : c.total)
+      ? (src.type === 'CREDIT_NOTE' ? -c.moneyOwed : c.moneyOwed)
       : 0;
     const customerSwitched = wasAffectingAR
       && nowAffectsAR
@@ -1347,7 +1442,7 @@ export class BillingService {
           igstAmount: c.igst,
           roundOff: c.roundOff,
           totalAmount: c.total,
-          balanceAmount: c.isChallan ? 0 : c.total, // paidAmount is 0 (guard above)
+          balanceAmount: c.isChallan ? 0 : c.moneyOwed, // money balance; paidAmount is 0 (guard above)
           notes: dto.notes ?? null,
         totalWeightG: dto.totalWeightG != null ? dto.totalWeightG : null,
         purpose: dto.purpose ?? null,
@@ -1603,6 +1698,55 @@ export class BillingService {
 
   async createPayment(dto: CreatePaymentDto, userId?: number) {
     const customer = await this.getCustomer(dto.customerId);
+
+    // ---- METAL receipt — customer hands over silver. Records a METAL Payment
+    // AND posts the grams into the customer metal ledger + balance (the same
+    // system invoicing / the customer statement already read from). ----
+    if (dto.kind === 'METAL') {
+      const weightG = r3(Number(dto.weightG ?? 0));
+      if (weightG <= 0) throw new BadRequestException('Metal weight (g) must be > 0.');
+      const variant = dto.variantId
+        ? await this.prisma.materialVariant.findUnique({ where: { id: dto.variantId } })
+        : await this.prisma.materialVariant.findFirst({ where: { variantCode: 'SILV-935' } });
+      if (!variant) throw new BadRequestException('Pick a silver variant for the metal receipt.');
+      if (!variant.trackByWeight) throw new BadRequestException(`"${variant.variantName}" is not weight-tracked.`);
+      const paymentNumber = await nextCode(this.prisma, 'payment', 'paymentNumber', 'RCT', 4);
+      return this.prisma.$transaction(async (tx) => {
+        const p = await tx.payment.create({
+          data: {
+            paymentNumber,
+            paymentDate: new Date(dto.paymentDate),
+            customerId: dto.customerId,
+            amount: 0,
+            mode: (dto.mode ?? 'OTHER') as any,
+            kind: 'METAL',
+            weightG,
+            variantId: variant.id,
+            estimateId: dto.estimateId ?? null,
+            reference: dto.reference ?? null,
+            notes: dto.notes ?? null,
+            createdById: userId ?? null,
+          },
+        });
+        const bal = await tx.customerMetalBalance.upsert({
+          where: { customerId_variantId: { customerId: dto.customerId, variantId: variant.id } },
+          update: { balanceWeight: { increment: weightG } },
+          create: { customerId: dto.customerId, variantId: variant.id, balanceWeight: weightG },
+        });
+        await tx.customerMetalLedger.create({
+          data: {
+            customerId: dto.customerId, variantId: variant.id,
+            eventType: 'ALLOCATE_ADVANCE',
+            weight: weightG, balanceAfter: r3(Number(bal.balanceWeight)),
+            refType: 'payment', refId: p.id,
+            note: dto.estimateId ? `Metal received · receipt ${paymentNumber} · estimate #${dto.estimateId}` : `Metal received · receipt ${paymentNumber}`,
+            createdById: userId ?? null,
+          },
+        });
+        return p;
+      });
+    }
+
     const amount = r2(dto.amount);
     if (amount <= 0) throw new BadRequestException('Amount must be > 0.');
     // Validate allocations sum.

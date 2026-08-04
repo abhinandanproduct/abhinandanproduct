@@ -148,6 +148,12 @@ export class CreatePaymentDto {
   @IsNumber() @Min(0) amount!: number;
   @IsEnum(['CASH', 'BANK', 'UPI', 'CHEQUE', 'OTHER'] as const)
   mode!: 'CASH' | 'BANK' | 'UPI' | 'CHEQUE' | 'OTHER';
+  // MONEY (default) allocates ₹ across invoices; METAL records grams of silver
+  // received into the customer metal ledger.
+  @IsOptional() @IsEnum(['MONEY', 'METAL'] as const) kind?: 'MONEY' | 'METAL';
+  @IsOptional() @IsNumber() @Min(0) weightG?: number;
+  @IsOptional() @IsInt() variantId?: number;
+  @IsOptional() @IsInt() estimateId?: number;
   @IsOptional() @IsString() reference?: string;
   @IsOptional() @IsString() notes?: string;
   @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => PaymentAllocationDto)

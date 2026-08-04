@@ -1256,6 +1256,26 @@ export default function NewInvoicePage() {
           estimates={openEstimates}
           value={coverages}
           cap={invoiceSilverG}
+          onRecordMetal={async (estimateId, grams) => {
+            if (!customerId) { toast.error('Pick a customer first.'); return; }
+            if (!(grams > 0)) { toast.error('Enter grams to cover for this estimate first.'); return; }
+            try {
+              await Api.billing.createPayment({
+                customerId: Number(customerId),
+                paymentDate: invoiceDate,
+                amount: 0,
+                mode: 'OTHER',
+                kind: 'METAL',
+                weightG: grams,
+                estimateId,
+                notes: 'Metal received against estimate (from invoice)',
+              });
+              toast.success(`Recorded ${grams.toFixed(3)} g metal received.`);
+              qcc.invalidateQueries({ queryKey: ['payments'] });
+              qcc.invalidateQueries({ queryKey: ['customer-advances-ledger'] });
+              qcc.invalidateQueries({ queryKey: ['customer-ledger'] });
+            } catch (e) { toast.error(getApiError(e).message); }
+          }}
           onClose={() => setCoverageOpen(false)}
           onSave={(next, otherChargesTotal) => {
             setCoverages(next);
@@ -1297,7 +1317,7 @@ export default function NewInvoicePage() {
  */
 type CoveragePickerEntry = { grams: string; include: boolean };
 function CoveragePickerDialog({
-  open, estimates, value, cap, onClose, onSave,
+  open, estimates, value, cap, onClose, onSave, onRecordMetal,
 }: {
   open: boolean;
   estimates: any[];
@@ -1305,6 +1325,7 @@ function CoveragePickerDialog({
   cap: number;
   onClose: () => void;
   onSave: (next: Record<number, CoveragePickerEntry>, otherChargesTotal: number) => void;
+  onRecordMetal?: (estimateId: number, grams: number) => void;
 }) {
   const [local, setLocal] = React.useState<Record<number, CoveragePickerEntry>>(value);
   React.useEffect(() => { if (open) setLocal(value); }, [open, value]);
@@ -1424,6 +1445,16 @@ function CoveragePickerDialog({
                         placeholder="0.000"
                         className={`h-8 w-24 text-right ${over ? 'border-destructive' : ''}`}
                       />
+                      {onRecordMetal && cur > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => onRecordMetal(e.id, Math.round(cur * 1000) / 1000)}
+                          className="mt-1 block w-24 rounded border border-info/40 bg-info/10 px-2 py-0.5 text-[10px] font-semibold text-info transition-colors hover:bg-info/20"
+                          title="Record this many grams of silver as received from the customer against this estimate (same date as the invoice)."
+                        >
+                          Record metal
+                        </button>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums text-xs">
                       {other.toLocaleString('en-IN', { minimumFractionDigits: 2 })}

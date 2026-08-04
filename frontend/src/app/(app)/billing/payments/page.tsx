@@ -21,6 +21,7 @@ export default function PaymentsPage() {
   const [form, setForm] = React.useState<any>({
     paymentDate: new Date().toISOString().slice(0, 10),
     mode: 'CASH',
+    kind: 'MONEY',
   });
 
   const q = useQuery<any[]>({
@@ -50,26 +51,50 @@ export default function PaymentsPage() {
     },
   );
 
+  const estimatesQ = useQuery<any[]>({
+    queryKey: ['open-estimates-pay', form.customerId],
+    queryFn: () =>
+      form.customerId
+        ? Api.billing.invoices({ customerId: form.customerId, type: 'QUOTE' })
+        : Promise.resolve([]),
+    enabled: !!form.customerId && form.kind === 'METAL',
+  });
+
   const create = useMutation({
     mutationFn: () =>
-      Api.billing.createPayment({
-        customerId: Number(form.customerId),
-        paymentDate: form.paymentDate,
-        amount: Number(form.amount),
-        mode: form.mode,
-        reference: form.reference || undefined,
-        notes: form.notes || undefined,
-        allocations: (form.allocations ?? [])
-          .filter((a: any) => Number(a.amount) > 0)
-          .map((a: any) => ({ invoiceId: Number(a.invoiceId), amount: Number(a.amount) })),
-      }),
+      form.kind === 'METAL'
+        ? Api.billing.createPayment({
+            customerId: Number(form.customerId),
+            paymentDate: form.paymentDate,
+            amount: 0,
+            mode: form.mode || 'OTHER',
+            kind: 'METAL',
+            weightG: Number(form.weightG),
+            estimateId: form.estimateId ? Number(form.estimateId) : undefined,
+            reference: form.reference || undefined,
+            notes: form.notes || undefined,
+          })
+        : Api.billing.createPayment({
+            customerId: Number(form.customerId),
+            paymentDate: form.paymentDate,
+            amount: Number(form.amount),
+            mode: form.mode,
+            kind: 'MONEY',
+            reference: form.reference || undefined,
+            notes: form.notes || undefined,
+            allocations: (form.allocations ?? [])
+              .filter((a: any) => Number(a.amount) > 0)
+              .map((a: any) => ({ invoiceId: Number(a.invoiceId), amount: Number(a.amount) })),
+          }),
     onSuccess: () => {
-      toast.success('Payment recorded.');
+      toast.success(form.kind === 'METAL' ? 'Metal receipt recorded.' : 'Payment recorded.');
       qc.invalidateQueries({ queryKey: ['payments'] });
       qc.invalidateQueries({ queryKey: ['invoices'] });
       qc.invalidateQueries({ queryKey: ['customers'] });
+      qc.invalidateQueries({ queryKey: ['customer-advances-ledger'] });
+      qc.invalidateQueries({ queryKey: ['open-estimates'] });
       setOpen(false);
-      setForm({ paymentDate: new Date().toISOString().slice(0, 10), mode: 'CASH' });
+      setForm({ paymentDate: new Date().toISOString().slice(0, 10), mode: 'CASH', kind: 'MONEY' });
     },
     onError: (e) => toast.error(getApiError(e).message),
   });
@@ -111,10 +136,16 @@ export default function PaymentsPage() {
                     <td className="px-4 py-2 font-semibold">{p.paymentNumber}</td>
                     <td className="px-4 py-2 text-xs">{new Date(p.paymentDate).toLocaleDateString('en-IN')}</td>
                     <td className="px-4 py-2">{p.customer?.customerName}</td>
-                    <td className="px-4 py-2 text-xs">{p.mode}</td>
+                    <td className="px-4 py-2 text-xs">
+                      {p.kind === 'METAL'
+                        ? <span className="rounded bg-info/15 px-1.5 py-0.5 font-semibold text-info">METAL</span>
+                        : p.mode}
+                    </td>
                     <td className="px-4 py-2 text-xs text-muted-foreground">{p.reference ?? '—'}</td>
                     <td className="px-4 py-2 text-right font-medium tabular-nums text-success">
-                      ₹ {Number(p.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      {p.kind === 'METAL'
+                        ? `${Number(p.weightG ?? 0).toFixed(3)} g`
+                        : `₹ ${Number(p.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`}
                     </td>
                   </tr>
                 ))}
@@ -132,17 +163,38 @@ export default function PaymentsPage() {
         open={open}
         onClose={() => setOpen(false)}
         size="lg"
-        title="Record Payment"
-        description="Receive money from a customer. Optionally allocate against specific invoices."
+        title="Record Payment Received"
+        description="Money (₹, allocated to invoices) or Metal (silver grams received from the customer)."
         footer={
           <>
             <Button variant="outline" onClick={() => setOpen(false)} disabled={create.isPending}>Cancel</Button>
-            <Button onClick={() => create.mutate()} disabled={create.isPending || !form.customerId || !form.amount}>
+            <Button
+              onClick={() => create.mutate()}
+              disabled={
+                create.isPending || !form.customerId ||
+                (form.kind === 'METAL' ? !(Number(form.weightG) > 0) : !(Number(form.amount) > 0))
+              }
+            >
               {create.isPending && <Spinner className="text-primary-foreground" />} Save
             </Button>
           </>
         }
       >
+        {/* Money vs Metal toggle. */}
+        <div className="mb-3 inline-flex rounded-lg border border-border p-0.5">
+          {(['MONEY', 'METAL'] as const).map((k) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setForm({ ...form, kind: k })}
+              className={`rounded-md px-4 py-1.5 text-sm font-semibold transition-colors ${
+                form.kind === k ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {k === 'MONEY' ? '₹ Money received' : '⚖ Metal received'}
+            </button>
+          ))}
+        </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Customer *">
             <SearchableSelect
@@ -159,23 +211,47 @@ export default function PaymentsPage() {
           <Field label="Date">
             <Input type="date" value={form.paymentDate} onChange={(e) => setForm({ ...form, paymentDate: e.target.value })} />
           </Field>
-          <Field label="Amount (₹) *">
-            <Input type="number" step="0.01" value={form.amount ?? ''} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
-          </Field>
-          <Field label="Mode">
-            <select className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
-              value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
-              <option value="CASH">Cash</option>
-              <option value="BANK">Bank Transfer</option>
-              <option value="UPI">UPI</option>
-              <option value="CHEQUE">Cheque</option>
-              <option value="OTHER">Other</option>
-            </select>
-          </Field>
-          <Field label="Reference (cheque # / UPI ref)" className="col-span-2">
+          {form.kind === 'METAL' ? (
+            <>
+              <Field label="Silver received (g) *">
+                <Input type="number" step="0.001" value={form.weightG ?? ''} onChange={(e) => setForm({ ...form, weightG: e.target.value })} placeholder="0.000" />
+              </Field>
+              <Field label="Against estimate (optional)">
+                <SearchableSelect
+                  value={form.estimateId ?? ''}
+                  onChange={(v) => setForm({ ...form, estimateId: v })}
+                  placeholder="— link an estimate —"
+                  options={(estimatesQ.data ?? [])
+                    .filter((e: any) => (e.summary?.silverStatus ?? 'OPEN') !== 'CLOSED')
+                    .map((e: any) => ({
+                      value: e.id,
+                      label: e.invoiceNumber,
+                      subtitle: `Metal due ${Number(Math.max(0, (e.summary?.silverRequiredG ?? 0) - (e.summary?.silverAllocatedG ?? 0))).toFixed(3)} g`,
+                    }))}
+                />
+              </Field>
+            </>
+          ) : (
+            <>
+              <Field label="Amount (₹) *">
+                <Input type="number" step="0.01" value={form.amount ?? ''} onChange={(e) => setForm({ ...form, amount: e.target.value })} />
+              </Field>
+              <Field label="Mode">
+                <select className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={form.mode} onChange={(e) => setForm({ ...form, mode: e.target.value })}>
+                  <option value="CASH">Cash</option>
+                  <option value="BANK">Bank Transfer</option>
+                  <option value="UPI">UPI</option>
+                  <option value="CHEQUE">Cheque</option>
+                  <option value="OTHER">Other</option>
+                </select>
+              </Field>
+            </>
+          )}
+          <Field label="Reference / note" className="col-span-2">
             <Input value={form.reference ?? ''} onChange={(e) => setForm({ ...form, reference: e.target.value })} />
           </Field>
-          {form.customerId && (openInvoicesQ.data ?? []).length > 0 && (
+          {form.kind === 'MONEY' && form.customerId && (openInvoicesQ.data ?? []).length > 0 && (
             <div className="col-span-2 rounded-md border border-border p-2">
               <div className="mb-2 text-xs font-semibold text-muted-foreground">
                 Allocate to open invoices (optional — leave 0 to keep on-account)

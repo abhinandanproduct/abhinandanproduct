@@ -1691,6 +1691,14 @@ enum PaymentMode {
   OTHER
 }
 
+// A payment received is either MONEY (₹, allocated to invoice balances) or
+// METAL (grams of silver the customer handed over, recorded into the customer
+// metal ledger). One "Payments Received" list surfaces both.
+enum PaymentKind {
+  MONEY
+  METAL
+}
+
 model Customer {
   id              Int       @id @default(autoincrement())
   customerCode    String    @unique @map("customer_code") @db.VarChar(20)
@@ -1989,6 +1997,14 @@ model Payment {
   customerId      Int        @map("customer_id")
   amount          Decimal    @db.Decimal(14, 2)
   mode            PaymentMode
+  // MONEY (default) or METAL. For METAL: amount is 0, weightG holds the grams
+  // received, variantId the silver variant, estimateId the estimate it settles.
+  // Plain scalar FKs (no Prisma relation) — the metal grams are also posted to
+  // the CustomerMetalLedger via the customer-advances service on create.
+  kind            PaymentKind @default(MONEY)
+  weightG         Decimal?    @map("weight_g") @db.Decimal(14, 3)
+  variantId       Int?        @map("variant_id")
+  estimateId      Int?        @map("estimate_id")
   reference       String?    @db.VarChar(120)
   notes           String?    @db.Text
   createdById     Int?       @map("created_by_id")
