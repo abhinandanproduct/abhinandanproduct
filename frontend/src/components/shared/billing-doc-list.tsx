@@ -114,6 +114,46 @@ export function BillingDocList({
     },
   );
 
+  // Row actions — shared by the desktop table and the mobile card stack so
+  // both surfaces expose the exact same menu.
+  const buildActions = (inv: any): RowAction[] => [
+    ...(showTempAction && inv.status !== 'CANCELLED' ? [{
+      key: 'temp',
+      label: 'Generate Temp Invoice',
+      icon: FileText,
+      disabled: genTemp.isPending,
+      onClick: () => {
+        if (confirm(`Generate temp invoice from ${inv.invoiceNumber}?\n\nAll line items will be summed into ONE consolidated silver row. Prints as a regular invoice; the TEMP marker is software-only.`)) {
+          genTemp.mutate(inv.id);
+        }
+      },
+    }] : []),
+    {
+      key: 'print',
+      label: 'Print',
+      icon: Printer,
+      onClick: () => window.open(Api.billing.invoicePdfUrl(inv.id), '_blank'),
+    },
+    ...(inv.status !== 'CANCELLED' ? [{
+      key: 'cancel',
+      label: 'Cancel',
+      icon: Ban,
+      tone: 'warning' as const,
+      onClick: () => { if (confirm(`Cancel ${inv.invoiceNumber}?`)) cancel.mutate(inv.id); },
+    }] : []),
+    {
+      key: 'delete',
+      label: 'Delete (hard remove)',
+      icon: Trash2,
+      tone: 'destructive' as const,
+      onClick: () => {
+        if (confirm(`Permanently delete ${inv.invoiceNumber}?\n\nThis removes the row + all line items, charges, allocations. AR balance is unwound.`)) {
+          remove.mutate(inv.id);
+        }
+      },
+    },
+  ];
+
   return (
     <div className="space-y-4">
       <PageHeader
@@ -137,9 +177,62 @@ export function BillingDocList({
             <div className="flex items-center justify-center py-12 text-muted-foreground">
               <Spinner /> Loading...
             </div>
+          ) : sorted.length === 0 ? (
+            <div className="px-4 py-12 text-center text-muted-foreground">Nothing here yet.</div>
           ) : (
-            <div>
-            <table className="w-full text-sm">
+            <>
+            {/* Mobile / tablet: card stack (below lg). Readable one-item-per-
+                card layout instead of a squished multi-column table. */}
+            <ul className="divide-y divide-border lg:hidden">
+              {sorted.map((inv) => (
+                <li key={inv.id} className="p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <Link href={`/billing/invoices/${inv.id}`} className="font-semibold tracking-tight text-info hover:underline">
+                        {inv.invoiceNumber}
+                      </Link>
+                      {inv.type === 'TEMP_INVOICE' && (
+                        <span className="ml-2 rounded bg-warning/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-warning ring-1 ring-warning/30">TEMP</span>
+                      )}
+                      <div className="mt-0.5 truncate text-sm text-foreground" title={inv.billToName}>{inv.billToName}</div>
+                      <div className="text-[11px] text-muted-foreground">{new Date(inv.invoiceDate).toLocaleDateString('en-IN')}</div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${STATUS_BADGE[inv.status] ?? STATUS_BADGE.DRAFT}`}>{inv.status}</span>
+                      <RowActionsMenu actions={buildActions(inv)} />
+                    </div>
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                    <div className="flex justify-between gap-2">
+                      <span className="text-muted-foreground">Total</span>
+                      <span className="font-medium tabular-nums">₹{Number(inv.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-muted-foreground">Balance</span>
+                      <span className="tabular-nums text-warning">₹{Number(inv.balanceAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                    {isEstimate && (
+                      <>
+                        <div className="flex justify-between gap-2">
+                          <span className="text-muted-foreground">Silver Req.</span>
+                          <span className="tabular-nums">{Number(inv.summary?.silverRequiredG ?? 0).toFixed(3)} g</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-muted-foreground">Silver</span>
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${SILVER_BADGE[inv.summary?.silverStatus ?? 'OPEN']}`}>{inv.summary?.silverStatus ?? 'OPEN'}</span>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+
+            {/* Desktop: full table (lg and up). no-stack: this component
+                already renders its own mobile cards above, so the global
+                auto-stacker must leave this table alone. */}
+            <div className="hidden lg:block">
+            <table className="w-full text-sm no-stack">
               <thead className="bg-secondary/30 text-left text-xs text-muted-foreground">
                 <tr>
                   <SortableTh label="Number"   sortKey="invoiceNumber"  currentKey={sortKey} currentDir={sortDir} onToggle={toggle} className="px-2 py-2" />
@@ -201,45 +294,7 @@ export function BillingDocList({
                       ₹{Number(inv.balanceAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
                     <td className="px-2 py-2 whitespace-nowrap">
-                      <RowActionsMenu
-                        actions={[
-                          ...(showTempAction && inv.status !== 'CANCELLED' ? [{
-                            key: 'temp',
-                            label: 'Generate Temp Invoice',
-                            icon: FileText,
-                            disabled: genTemp.isPending,
-                            onClick: () => {
-                              if (confirm(`Generate temp invoice from ${inv.invoiceNumber}?\n\nAll line items will be summed into ONE consolidated silver row. Prints as a regular invoice; the TEMP marker is software-only.`)) {
-                                genTemp.mutate(inv.id);
-                              }
-                            },
-                          }] : []),
-                          {
-                            key: 'print',
-                            label: 'Print',
-                            icon: Printer,
-                            onClick: () => window.open(Api.billing.invoicePdfUrl(inv.id), '_blank'),
-                          },
-                          ...(inv.status !== 'CANCELLED' ? [{
-                            key: 'cancel',
-                            label: 'Cancel',
-                            icon: Ban,
-                            tone: 'warning' as const,
-                            onClick: () => { if (confirm(`Cancel ${inv.invoiceNumber}?`)) cancel.mutate(inv.id); },
-                          }] : []),
-                          {
-                            key: 'delete',
-                            label: 'Delete (hard remove)',
-                            icon: Trash2,
-                            tone: 'destructive' as const,
-                            onClick: () => {
-                              if (confirm(`Permanently delete ${inv.invoiceNumber}?\n\nThis removes the row + all line items, charges, allocations. AR balance is unwound.`)) {
-                                remove.mutate(inv.id);
-                              }
-                            },
-                          },
-                        ]}
-                      />
+                      <RowActionsMenu actions={buildActions(inv)} />
                     </td>
                   </tr>
                 ))}
@@ -274,6 +329,7 @@ export function BillingDocList({
               )}
             </table>
             </div>
+            </>
           )}
         </CardContent>
       </Card>

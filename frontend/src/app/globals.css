@@ -173,27 +173,39 @@
    overflows a 1024px dialog. Anything below xl now stacks into cards —
    only truly wide desktops render the table view. */
 @media (max-width: 1279px) {
+  /* `.table-scroll > table` = opt-in wrapper; `table.stackable` = applied
+     automatically by the AutoTableLabels helper to every data table so
+     EVERY list becomes a readable card stack on phones/tablets, not a
+     squished or side-scrolling grid. Both share the same card styling. */
   .table-scroll > table,
   .table-scroll > table > thead,
   .table-scroll > table > tbody,
   .table-scroll > table > tbody > tr,
-  .table-scroll > table > tbody > tr > td {
+  .table-scroll > table > tbody > tr > td,
+  table.stackable,
+  table.stackable > thead,
+  table.stackable > tbody,
+  table.stackable > tbody > tr,
+  table.stackable > tbody > tr > td {
     display: block;
     width: 100%;
     max-width: 100%;
   }
   /* Hide desktop <thead> — labels move inline via ::before on <td>. */
-  .table-scroll > table > thead {
+  .table-scroll > table > thead,
+  table.stackable > thead {
     display: none;
   }
-  .table-scroll > table > tbody > tr {
+  .table-scroll > table > tbody > tr,
+  table.stackable > tbody > tr {
     margin-bottom: 0.5rem;
     border: 1px solid hsl(var(--border));
     border-radius: 0.5rem;
     background: hsl(var(--card));
     padding: 0.5rem;
   }
-  .table-scroll > table > tbody > tr > td {
+  .table-scroll > table > tbody > tr > td,
+  table.stackable > tbody > tr > td {
     padding: 0.25rem 0;
     text-align: left !important;
     display: flex;
@@ -201,9 +213,17 @@
     gap: 0.75rem;
     align-items: center;
     border: 0;
+    min-height: 0;
   }
-  /* Cell label — from data-label attribute on <td> (opt-in per page). */
-  .table-scroll > table > tbody > tr > td[data-label]::before {
+  /* Empty a cell that has no content so it doesn't leave a blank row. */
+  .table-scroll > table > tbody > tr > td:empty,
+  table.stackable > tbody > tr > td:empty {
+    display: none;
+  }
+  /* Cell label — from the data-label attribute (set per-page or auto-filled
+     from the column header by AutoTableLabels). */
+  .table-scroll > table > tbody > tr > td[data-label]::before,
+  table.stackable > tbody > tr > td[data-label]::before {
     content: attr(data-label);
     font-size: 10px;
     font-weight: 700;

@@ -70,8 +70,45 @@ export function PurchasesDocList({
             <div className="flex items-center justify-center py-12 text-muted-foreground">
               <Spinner /> Loading...
             </div>
+          ) : sorted.length === 0 ? (
+            <div className="px-4 py-12 text-center text-muted-foreground">Nothing here yet.</div>
           ) : (
-            <table className="w-full text-sm">
+            <>
+            {/* Mobile / tablet: card stack (below lg). */}
+            <ul className="divide-y divide-border lg:hidden">
+              {sorted.map((b) => (
+                <li key={b.id} className="p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <Link href={`/purchases/bills/${b.id}`} className="font-semibold tracking-tight text-info hover:underline">
+                        {b.billNumber}
+                      </Link>
+                      <div className="mt-0.5 truncate text-sm text-foreground" title={b.vendorName}>{b.vendorName}</div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {new Date(b.billDate).toLocaleDateString('en-IN')}
+                        {b.vendorRefNumber ? ` · Ref ${b.vendorRefNumber}` : ''}
+                      </div>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${STATUS_BADGE[b.status] ?? STATUS_BADGE.DRAFT}`}>{b.status}</span>
+                  </div>
+                  <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                    <div className="flex justify-between gap-2">
+                      <span className="text-muted-foreground">Total</span>
+                      <span className="font-medium tabular-nums">₹{Number(b.totalAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                    <div className="flex justify-between gap-2">
+                      <span className="text-muted-foreground">Balance</span>
+                      <span className="tabular-nums text-warning">₹{Number(b.balanceAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+
+            {/* Desktop: full table (lg and up). no-stack: own mobile cards
+                above, so the global auto-stacker skips this table. */}
+            <div className="hidden lg:block">
+            <table className="w-full text-sm no-stack">
               <thead className="bg-secondary/30 text-left text-xs text-muted-foreground">
                 <tr>
                   <SortableTh label="Number"     sortKey="billNumber"      currentKey={sortKey} currentDir={sortDir} onToggle={toggle} />
@@ -107,11 +144,10 @@ export function PurchasesDocList({
                     </td>
                   </tr>
                 ))}
-                {sorted.length === 0 && (
-                  <tr><td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">Nothing here yet.</td></tr>
-                )}
               </tbody>
             </table>
+            </div>
+            </>
           )}
         </CardContent>
       </Card>

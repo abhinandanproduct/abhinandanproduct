@@ -149,7 +149,10 @@ export function DataTable<TData, TValue>({
         'overflow-x-auto rounded-xl border border-border bg-card lg:overflow-x-hidden',
         mobileCard && 'hidden lg:block',
       )}>
-        <table className="w-full text-sm">
+        {/* When the caller supplies its own mobileCard stack, opt this table
+            out of the global auto-stacker (no-stack). Without a mobileCard,
+            the table auto-stacks into labelled cards on small screens. */}
+        <table className={cn('w-full text-sm', mobileCard && 'no-stack')}>
           <thead className="bg-secondary/40">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id} className="border-b border-border">

@@ -129,15 +129,15 @@ export default function InvoiceDetailPage() {
             <tbody>
               {inv.items.map((it: any, i: number) => (
                 <tr key={it.id} className="border-t border-border">
-                  <td className="px-4 py-2">{i + 1}</td>
-                  <td className="px-4 py-2 font-semibold">{it.itemNumber ?? '—'}</td>
-                  <td className="px-4 py-2">{it.description}</td>
-                  <td className="px-4 py-2 text-xs">{it.hsnCode}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{it.quantity}</td>
+                  <td className="px-4 py-2" data-label="#">{i + 1}</td>
+                  <td className="px-4 py-2 font-semibold" data-label="Item">{it.itemNumber ?? '—'}</td>
+                  <td className="px-4 py-2" data-label="Description">{it.description}</td>
+                  <td className="px-4 py-2 text-xs" data-label="HSN">{it.hsnCode}</td>
+                  <td className="px-4 py-2 text-right tabular-nums" data-label="Qty">{it.quantity}</td>
                   {/* Net line weight (Total Gross − Less) — billing works on
                       net, so the detail table mirrors it. Falls back to
                       weightG × qty when no typed total / less is present. */}
-                  <td className="px-4 py-2 text-right tabular-nums">{(() => {
+                  <td className="px-4 py-2 text-right tabular-nums" data-label="Net Wt (g)">{(() => {
                     const qty = Number(it.quantity || 0);
                     const gross = it.totalWeightG != null && Number(it.totalWeightG) > 0
                       ? Number(it.totalWeightG)
@@ -145,9 +145,9 @@ export default function InvoiceDetailPage() {
                     const less = Number(it.lessWeightG || 0) * qty;
                     return Math.max(0, gross - less).toFixed(3);
                   })()}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{Number(it.silverRatePerG).toFixed(2)}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{Number(it.makingRatePerG).toFixed(2)}</td>
-                  <td className="px-4 py-2 text-right tabular-nums font-medium">
+                  <td className="px-4 py-2 text-right tabular-nums" data-label="Silver /g">{Number(it.silverRatePerG).toFixed(2)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums" data-label="Making /g">{Number(it.makingRatePerG).toFixed(2)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums font-medium" data-label="Amount">
                     ₹ {Number(it.lineAmount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                   </td>
                 </tr>

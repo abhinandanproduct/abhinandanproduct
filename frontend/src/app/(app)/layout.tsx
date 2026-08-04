@@ -7,6 +7,7 @@ import { Sidebar } from '@/components/layout/sidebar';
 import { Topbar } from '@/components/layout/topbar';
 import { Spinner } from '@/components/ui/spinner';
 import { NavProgress } from '@/components/layout/nav-progress';
+import { AutoTableLabels } from '@/components/layout/auto-table-labels';
 import { FiscalYearProvider } from '@/lib/fiscal-year';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -30,6 +31,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     <FiscalYearProvider>
       <div className="min-h-screen">
         <NavProgress />
+        <AutoTableLabels />
         <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
         <div className="lg:pl-64">
           <Topbar onMenu={() => setSidebarOpen(true)} />
