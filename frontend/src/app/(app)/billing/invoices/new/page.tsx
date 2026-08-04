@@ -29,8 +29,13 @@ type LineRow = {
   weightG: string;
   // When set, the operator typed a total weight directly (no per-piece
   // weight in hand). Wins over weightG on save; back-computed to per-pc
-  // via totalWtG / quantity in the payload.
+  // via totalWtG / quantity in the payload. This is the GROSS line total.
   totalWtG: string;
+  // NET line total (Total Gross − Less). Operator enters Gross + Net; Less
+  // is auto-derived = max(0, gross − net). When set, drives the billable
+  // weight and the saved lessWeightG. Blank falls back to gross − lessWeightG
+  // (legacy rows loaded before Net was captured).
+  netWtG: string;
   // Additional charges — PER PIECE. On save we compute
   //   extraAmount = additionalPerPc × quantity
   // and send that as the flat `extraAmount` the backend expects. On edit
@@ -70,6 +75,7 @@ const newRow = (): LineRow => ({
   description: '',
   hsnCode: '7113',
   totalWtG: '',
+  netWtG: '',
   additionalPerPc: '',
   quantity: '1',
   weightG: '',
@@ -111,6 +117,20 @@ const newOtherChargesRow = (amount: number): LineRow => ({
   weightG: '',
   extraAmount: amount.toFixed(2),
 });
+
+// Gross line total (g) — operator-typed total wins, else weightG × qty.
+const grossLineWt = (l: { totalWtG?: string; weightG?: string; quantity?: string }): number =>
+  l.totalWtG ? Number(l.totalWtG) : Number(l.weightG || 0) * Number(l.quantity || 0);
+
+// NET line weight (g) — the weight billing charges on. Operator-typed Net
+// (netWtG) wins; otherwise net = gross − less×qty (legacy rows). Reduces to
+// gross when neither Net nor Less is set.
+const netLineWt = (l: { totalWtG?: string; weightG?: string; quantity?: string; netWtG?: string; lessWeightG?: string }): number => {
+  const gross = grossLineWt(l);
+  if (l.netWtG !== undefined && String(l.netWtG) !== '') return Math.max(0, Number(l.netWtG));
+  const less = Number(l.lessWeightG || 0) * Number(l.quantity || 0);
+  return Math.max(0, gross - less);
+};
 
 export default function NewInvoicePage() {
   const router = useRouter();
@@ -208,6 +228,18 @@ export default function NewInvoicePage() {
       entries,
     };
   }, [coverages]);
+
+  // The invoice's own silver grams — the CAP coverages draw against. Uses
+  // the NET weight of the "Mixed Silver" line(s), falling back to total net
+  // weight across all lines. Mirrors the backend cap so the picker shows the
+  // same "how much is left of the 2000 g" the server will enforce. Charge-
+  // only rows (Other Charges) contribute nothing (net = 0).
+  const invoiceSilverG = React.useMemo(() => {
+    const mixed = lines.filter((l) =>
+      /mixed\s+silver/i.test(`${l.itemNumber ?? ''} ${l.description ?? ''}`));
+    const src = mixed.length ? mixed : lines.filter((l) => !isOtherChargesRow(l));
+    return Math.round(src.reduce((s, l) => s + netLineWt(l), 0) * 1000) / 1000;
+  }, [lines]);
 
   // Reset coverages when customer or type changes — stale selection would
   // point at the wrong customer's estimates. Skipped in edit mode so the
@@ -346,6 +378,18 @@ export default function NewInvoicePage() {
       // (2000 g stays 2000, doesn't drift to 1999.98 from per-piece
       // rounding). Falls back to empty so weightG × qty is the display.
       totalWtG: (it as any).totalWeightG != null ? String((it as any).totalWeightG) : '',
+      // Net line total — seed from Gross − Less so the operator sees the Net
+      // they'll now edit directly. Gross = typed total (or weightG × qty);
+      // Less = lessWeightG × qty. Blank when there's no weight at all.
+      netWtG: (() => {
+        const qty = Number(it.quantity || 0);
+        const gross = (it as any).totalWeightG != null && Number((it as any).totalWeightG) > 0
+          ? Number((it as any).totalWeightG)
+          : Number(it.weightG || 0) * qty;
+        if (!(gross > 0)) return '';
+        const less = Number(it.lessWeightG || 0) * qty;
+        return String(Math.max(0, gross - less));
+      })(),
       // Back-derive per-piece additional charge from stored flat total.
       // extraAmount is a whole-line figure; ÷ qty gives the per-piece
       // rate the operator originally typed.
@@ -407,17 +451,9 @@ export default function NewInvoicePage() {
   });
 
   const totals = React.useMemo(() => {
-    // Silver + making apply to NET line weight (Total Gross - Less).
-    // Wt/pc is per-piece GROSS; less/pc × qty is subtracted from Gross
-    // line total to get Net line total. Additional/pc × qty is a
-    // separate flat charge on top.
-    const netLineWt = (l: any): number => {
-      const gross = l.totalWtG
-        ? Number(l.totalWtG)
-        : Number(l.weightG || 0) * Number(l.quantity || 0);
-      const less = Number(l.lessWeightG || 0) * Number(l.quantity || 0);
-      return Math.max(0, gross - less);
-    };
+    // Silver + making apply to NET line weight (Total Gross − Less).
+    // Operator enters Gross + Net; Less is auto-derived. netLineWt() is the
+    // shared module helper (Net-typed wins, else gross − less).
     const lineSub = lines.reduce((s, l) => {
       const wt = netLineWt(l);
       const sv = Number(l.silverRatePerG || silverRate || 0);
@@ -477,6 +513,13 @@ export default function NewInvoicePage() {
           // verbatim — avoids the 33.333 × 60 = 1999.98 drift that comes
           // from re-multiplying a 3-decimal per-piece weight.
           const snapshotTotal = l.totalWtG ? Number(l.totalWtG) : undefined;
+          // Less Wt is derived from Gross − Net (operator enters Net; Less is
+          // auto-calculated). Stored PER PIECE so the backend contract
+          // (net = gross − less×qty) holds. Zero ⇒ omit so simple lines stay
+          // clean. netLineWt() falls back to legacy lessWeightG when Net was
+          // never typed (edit of an old invoice), preserving those values.
+          const grossLine = l.totalWtG ? Number(l.totalWtG) : Number(l.weightG || 0) * qty;
+          const lessPerPc = qty > 0 ? Math.max(0, grossLine - netLineWt(l)) / qty : 0;
           return {
           itemId: l.itemId === '' ? undefined : Number(l.itemId),
           itemNumber: l.itemNumber || undefined,
@@ -488,7 +531,7 @@ export default function NewInvoicePage() {
           silverRatePerG: l.silverRatePerG ? Number(l.silverRatePerG) : undefined,
           makingRatePerG: l.makingRatePerG ? Number(l.makingRatePerG) : undefined,
           // Detailed — send only the fields the operator actually filled in.
-          lessWeightG: l.lessWeightG ? Number(l.lessWeightG) : undefined,
+          lessWeightG: lessPerPc > 0.0000005 ? Number(lessPerPc.toFixed(6)) : undefined,
           boxWeightG: l.boxWeightG ? Number(l.boxWeightG) : undefined,
           bagWeightG: l.bagWeightG ? Number(l.bagWeightG) : undefined,
           tagWeightG: l.tagWeightG ? Number(l.tagWeightG) : undefined,
@@ -787,7 +830,7 @@ export default function NewInvoicePage() {
                   <th className="px-2 py-2">Item &amp; Description</th>
                   <th className="px-2 py-2">HSN</th>
                   <th className="px-2 py-2 text-right">Qty</th>
-                  <th className="px-2 py-2 text-right">Total Wt (g)</th>
+                  <th className="px-2 py-2 text-right">Gross / Net (g)</th>
                   {type !== 'DELIVERY_CHALLAN' && (
                     <>
                       <th className="px-2 py-2 text-right">Silver /g</th>
@@ -801,13 +844,9 @@ export default function NewInvoicePage() {
               </thead>
               <tbody>
                 {lines.map((l, idx) => {
-                  // Net line weight: (Gross line total) − (less/pc × qty).
-                  // Silver + making apply to Net (= Total Wt per spec).
-                  const grossLine = l.totalWtG
-                    ? Number(l.totalWtG)
-                    : Number(l.weightG || 0) * Number(l.quantity || 0);
-                  const lessLine = Number(l.lessWeightG || 0) * Number(l.quantity || 0);
-                  const wt = Math.max(0, grossLine - lessLine);
+                  // Net line weight — the weight silver + making charge on.
+                  // Operator enters Gross + Net; Less is auto-derived.
+                  const wt = netLineWt(l);
                   const sv = Number(l.silverRatePerG || silverRate || 0);
                   const mk = Number(l.makingRatePerG || makingRate || 0);
                   // Additional charges are per-piece × qty (flat line total).
@@ -896,20 +935,35 @@ export default function NewInvoicePage() {
                           onChange={(e) => setLines((rs) => rs.map((r, i) => i === idx ? { ...r, quantity: e.target.value } : r))}
                           className="text-right px-2 text-sm" />
                       </td>
-                      {/* Total Wt — the ONLY weight input now (Wt/pc removed
-                          per operator spec). Snapshotted on save so the PDF
-                          prints the exact typed value, no per-piece drift.
-                          weightG is back-derived on save = totalWtG / qty. */}
+                      {/* Weight cell — GROSS (top) + NET (below). Operator
+                          enters Gross (with stones) then Net (silver only);
+                          Less = Gross − Net is auto-derived and shown as a
+                          caption. Silver + making bill on Net. Gross is
+                          snapshotted so the PDF prints the exact typed total
+                          (no per-piece drift). Net blank ⇒ Net = Gross. */}
                       <td className="px-2 py-2 align-top">
                         <Input type="number" step="0.001"
-                          placeholder="0.000"
+                          placeholder="Gross"
                           value={l.totalWtG || (l.weightG && Number(l.quantity) > 0
                             ? (Number(l.weightG) * Number(l.quantity)).toFixed(3)
                             : '')}
                           onChange={(e) => setLines((rs) => rs.map((r, i) => i === idx ? {
                             ...r, totalWtG: e.target.value, weightG: '',
                           } : r))}
-                          className="text-right px-2 text-sm" />
+                          className="text-right px-2 text-sm"
+                          title="Gross weight — full line total with stones / findings." />
+                        <Input type="number" step="0.001"
+                          placeholder={grossLineWt(l) > 0 ? grossLineWt(l).toFixed(3) : 'Net'}
+                          value={l.netWtG}
+                          onChange={(e) => setLines((rs) => rs.map((r, i) => i === idx ? { ...r, netWtG: e.target.value } : r))}
+                          className="mt-1 text-right px-2 text-sm"
+                          title="Net weight — silver only. Less = Gross − Net is auto-calculated. Blank ⇒ Net = Gross." />
+                        {(() => {
+                          const less = Math.max(0, grossLineWt(l) - netLineWt(l));
+                          return less > 0.0005
+                            ? <div className="mt-0.5 text-right text-[10px] text-muted-foreground">Less {less.toFixed(3)} g</div>
+                            : null;
+                        })()}
                       </td>
                       {type !== 'DELIVERY_CHALLAN' && (
                         <>
@@ -978,7 +1032,8 @@ export default function NewInvoicePage() {
                             <DetailInput row={l} idx={idx} setLines={setLines} field="size" label="Size" />
                             <DetailInput row={l} idx={idx} setLines={setLines} field="barcode" label="Barcode" />
 
-                            <DetailNum row={l} idx={idx} setLines={setLines} field="lessWeightG" label="Less Wt (g)" step="0.001" />
+                            {/* Less Wt is auto-derived (Gross − Net) from the
+                                main weight cell — no separate input. */}
                             <DetailNum row={l} idx={idx} setLines={setLines} field="boxWeightG" label="Box (g)" step="0.001" />
                             <DetailNum row={l} idx={idx} setLines={setLines} field="bagWeightG" label="Bag (g)" step="0.001" />
                             <DetailNum row={l} idx={idx} setLines={setLines} field="tagWeightG" label="Tag (g)" step="0.001" />
@@ -1005,12 +1060,9 @@ export default function NewInvoicePage() {
                               GROSS weight per piece; silver + making
                               rates apply to Net (= Total Wt). */}
                           {(() => {
-                            const qtyN = Number(l.quantity || 0);
-                            const grossLine = l.totalWtG
-                              ? Number(l.totalWtG)
-                              : Number(l.weightG || 0) * qtyN;
-                            const lessLine = Number(l.lessWeightG || 0) * qtyN;
-                            const net = Math.max(0, grossLine - lessLine);
+                            const grossLine = grossLineWt(l);
+                            const net = netLineWt(l);
+                            const lessLine = Math.max(0, grossLine - net);
                             return (
                               <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-muted-foreground">
                                 <span>Total Gross = <b className="text-foreground tabular-nums">{grossLine.toFixed(3)} g</b></span>
@@ -1203,24 +1255,31 @@ export default function NewInvoicePage() {
           open={coverageOpen}
           estimates={openEstimates}
           value={coverages}
+          cap={invoiceSilverG}
           onClose={() => setCoverageOpen(false)}
-          onSave={(next) => {
+          onSave={(next, otherChargesTotal) => {
             setCoverages(next);
             setCoverageOpen(false);
-            // Sum every toggled estimate's Additional Charges total,
-            // then materialize that as a plain "Other Charges" line the
-            // operator can see + edit qty on. Replaces any earlier
-            // "Other Charges" row so switching toggles never doubles.
-            const total = Object.entries(next).reduce((s, [id, entry]) => {
-              if (!entry.include) return s;
-              const est = openEstimates.find((e: any) => e.id === Number(id));
-              return s + Number(est?.summary?.otherChargesAmt ?? 0);
-            }, 0);
+            // The picker computes the "Other Charges" total from the rows it
+            // rendered (which carry each estimate's charge amount), so we
+            // don't re-look-it-up here — that lookup used to fail silently
+            // once an estimate dropped out of the OPEN list. Materialize it
+            // as ONE editable "Other Charges" line, always replacing any
+            // prior one so re-opening the picker never doubles it.
+            const total = Math.round(otherChargesTotal * 100) / 100;
             setLines((prev) => {
               const cleaned = prev.filter((l) => !isOtherChargesRow(l));
               if (total > 0) cleaned.push(newOtherChargesRow(total));
               return cleaned;
             });
+            // Explicit confirmation — the operator asked for feedback that
+            // the selection + charges actually landed.
+            const covCount = Object.values(next).filter((v) => Number(v.grams) > 0).length;
+            const covG = Object.values(next).reduce((s, v) => s + (Number(v.grams) || 0), 0);
+            toast.success(
+              `${covCount} estimate${covCount === 1 ? '' : 's'} covered · ${covG.toFixed(3)} g`
+              + (total > 0 ? ` · Other charges ₹${total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : ''),
+            );
           }}
         />
       )}
@@ -1229,26 +1288,30 @@ export default function NewInvoicePage() {
 }
 
 /**
- * Coverage picker — modal listing the customer's OPEN/PARTIAL estimates
- * with a grams input per row. "Auto-fill" button drops the running silver
- * total across the still-uncovered estimates until the invoice's Mixed
- * Silver Jewellery grams are exhausted (FIFO by estimate id, matches the
- * ordering the estimate list uses).
+ * Coverage picker — modal listing the customer's OPEN/PARTIAL estimates.
+ * `cap` is the invoice's own silver grams (e.g. 2000 g); the header shows
+ * how much of it is still un-allocated as the operator assigns grams, and
+ * Save is blocked once the selection exceeds it. Ticking an estimate's
+ * "Select" box auto-fills its Cover g with the smaller of (that estimate's
+ * remaining need, the invoice's remaining cap) — the operator then edits.
  */
 type CoveragePickerEntry = { grams: string; include: boolean };
 function CoveragePickerDialog({
-  open, estimates, value, onClose, onSave,
+  open, estimates, value, cap, onClose, onSave,
 }: {
   open: boolean;
   estimates: any[];
   value: Record<number, CoveragePickerEntry>;
+  cap: number;
   onClose: () => void;
-  onSave: (next: Record<number, CoveragePickerEntry>) => void;
+  onSave: (next: Record<number, CoveragePickerEntry>, otherChargesTotal: number) => void;
 }) {
   const [local, setLocal] = React.useState<Record<number, CoveragePickerEntry>>(value);
   React.useEffect(() => { if (open) setLocal(value); }, [open, value]);
 
   const total = Object.values(local).reduce((s, v) => s + (Number(v?.grams) || 0), 0);
+  const capRemaining = Math.round((cap - total) * 1000) / 1000;
+  const overCap = cap > 0 && total > cap + 0.0005;
   const overRows = estimates.some((e) => {
     const req   = Number(e.summary?.silverRequiredG  ?? 0);
     const done  = Number(e.summary?.silverAllocatedG ?? 0);
@@ -1256,13 +1319,32 @@ function CoveragePickerDialog({
     const cur   = Number(local[e.id]?.grams || 0);
     return cur > remain + 0.0005;
   });
-  // Total "Other Charges" that will fold into the synthesized ABN line
-  // once toggles are honored — the sum of Σ(making + extra) across every
-  // estimate whose "Include" box is ticked in this dialog.
+  // Total "Other Charges" that will fold into the "Other Charges" invoice
+  // line — Σ(making + extra) across every estimate whose "Include" box is
+  // ticked. Computed here (where each estimate's amount is in hand) and
+  // handed to onSave so the caller never has to re-look-it-up.
   const otherChargesTotal = estimates.reduce((s, e) => {
     if (!local[e.id]?.include) return s;
     return s + Number(e.summary?.otherChargesAmt ?? 0);
   }, 0);
+
+  // Auto-fill Cover g when an estimate is selected — min(its remaining need,
+  // invoice cap left after the other rows). Un-selecting clears its grams.
+  const toggleSelect = (e: any, checked: boolean) => {
+    setLocal((r) => {
+      const cur = r[e.id] ?? { grams: '', include: false };
+      if (!checked) return { ...r, [e.id]: { ...cur, grams: '' } };
+      const req    = Number(e.summary?.silverRequiredG  ?? 0);
+      const done   = Number(e.summary?.silverAllocatedG ?? 0);
+      const remain = Math.max(0, req - done);
+      const others = Object.entries(r)
+        .filter(([k]) => Number(k) !== e.id)
+        .reduce((s, [, v]) => s + (Number(v.grams) || 0), 0);
+      const capLeft = cap > 0 ? Math.max(0, cap - others) : remain;
+      const fill = Math.round(Math.min(remain, capLeft) * 1000) / 1000;
+      return { ...r, [e.id]: { ...cur, grams: fill > 0 ? fill.toFixed(3) : '' } };
+    });
+  };
 
   return (
     <Dialog
@@ -1270,16 +1352,26 @@ function CoveragePickerDialog({
       onClose={onClose}
       size="lg"
       title="Estimates Covered"
-      description="How many grams of this invoice's silver settle each of the customer's open estimates. Backend rejects any row that exceeds its remaining need. Tick 'Include other charges' to roll that estimate's (making + additional) sum into an 'Other Charges' line on the invoice."
+      description="Tick an estimate to auto-fill how many grams of this invoice's silver settle it, then edit if needed. The header shows how much of the invoice's silver is still unallocated. Tick 'Include other charges' to roll that estimate's (making + additional) into an 'Other Charges' line."
       footer={
         <>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={() => onSave(local)} disabled={overRows}>
+          <Button onClick={() => onSave(local, otherChargesTotal)} disabled={overRows || overCap}>
             Save · {total.toFixed(3)} g{otherChargesTotal > 0 ? ` + ₹${otherChargesTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}` : ''}
           </Button>
         </>
       }
     >
+      {/* Invoice silver cap + running remaining — the "how much is left of
+          the 2000 g" the operator asked for. */}
+      <div className={`mb-3 flex flex-wrap items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm ${overCap ? 'border-destructive/50 bg-destructive/10' : 'border-border bg-secondary/20'}`}>
+        <span className="text-muted-foreground">Invoice silver: <b className="text-foreground tabular-nums">{cap.toFixed(3)} g</b></span>
+        <span className="text-muted-foreground">Selected: <b className="text-foreground tabular-nums">{total.toFixed(3)} g</b></span>
+        <span className={overCap ? 'font-semibold text-destructive' : 'text-muted-foreground'}>
+          {overCap ? 'Over by ' : 'Remaining: '}
+          <b className="tabular-nums">{Math.abs(capRemaining).toFixed(3)} g</b>
+        </span>
+      </div>
       {estimates.length === 0 ? (
         <div className="rounded border border-warning/40 bg-warning/10 px-3 py-3 text-sm text-warning">
           This customer has no OPEN or PARTIAL estimates. Nothing to cover.
@@ -1289,6 +1381,7 @@ function CoveragePickerDialog({
           <table className="w-full text-sm">
             <thead className="bg-secondary/30 text-left text-xs text-muted-foreground">
               <tr>
+                <th className="px-3 py-2 text-center">Select</th>
                 <th className="px-3 py-2">Estimate</th>
                 <th className="px-3 py-2 text-right">Required g</th>
                 <th className="px-3 py-2 text-right">Already alloc.</th>
@@ -1305,10 +1398,20 @@ function CoveragePickerDialog({
                 const remain   = Math.max(0, req - done);
                 const other    = Number(e.summary?.otherChargesAmt ?? 0);
                 const cur      = Number(local[e.id]?.grams || 0);
+                const selected = cur > 0;
                 const included = !!local[e.id]?.include;
                 const over     = cur > remain + 0.0005;
                 return (
                   <tr key={e.id} className="border-t border-border">
+                    <td className="px-3 py-2 text-center">
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={(ev) => toggleSelect(e, ev.target.checked)}
+                        className="size-4 cursor-pointer"
+                        title="Select to auto-fill Cover g (remaining need, capped by the invoice's silver). Edit after."
+                      />
+                    </td>
                     <td className="px-3 py-2 font-semibold">{e.invoiceNumber}</td>
                     <td className="px-3 py-2 text-right tabular-nums text-xs">{req.toFixed(3)}</td>
                     <td className="px-3 py-2 text-right tabular-nums text-xs">{done.toFixed(3)}</td>
@@ -1341,7 +1444,7 @@ function CoveragePickerDialog({
             </tbody>
             <tfoot>
               <tr className="border-t border-border bg-secondary/30 font-semibold">
-                <td colSpan={4} className="px-3 py-2 text-right">Total covered</td>
+                <td colSpan={5} className="px-3 py-2 text-right">Total covered</td>
                 <td className="px-3 py-2 text-right tabular-nums">{total.toFixed(3)} g</td>
                 <td className="px-3 py-2 text-right tabular-nums">
                   ₹{otherChargesTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}

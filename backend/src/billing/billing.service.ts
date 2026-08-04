@@ -605,7 +605,7 @@ export class BillingService {
     if (dto.type === 'TAX_INVOICE' && (dto as any).coverages?.length) {
       const withItems = await this.prisma.invoice.findUnique({
         where: { id: created.id },
-        include: { items: { select: { quantity: true, weightG: true, itemNumber: true } } },
+        include: { items: { select: { quantity: true, weightG: true, totalWeightG: true, lessWeightG: true, itemNumber: true } } },
       });
       try {
         await this.insertInvoiceCoverages(
@@ -656,11 +656,16 @@ export class BillingService {
     let totalMaking = 0;
     let totalExtras = 0;
     for (const l of src.items) {
+      // NET line weight (Total Gross − Less) — billing consolidates on net.
       // Prefer the operator-typed total when snapshotted (avoids the
-      // 33.333 × 60 = 1999.98 drift). Falls back to weightG × qty.
-      const lineWt = (l as any).totalWeightG != null
+      // 33.333 × 60 = 1999.98 drift). Falls back to weightG × qty. Less Wt
+      // (per-pc × qty) is subtracted so the consolidated silver line prints
+      // the same net weight the per-line amounts were charged on.
+      const grossLine = (l as any).totalWeightG != null
         ? Number((l as any).totalWeightG)
         : Number(l.weightG) * Number(l.quantity);
+      const lessLine = Number((l as any).lessWeightG ?? 0) * Number(l.quantity);
+      const lineWt = Math.max(0, grossLine - lessLine);
       totalWeight += lineWt;
       totalSilver += Number(l.silverAmount ?? 0);
       totalMaking += Number(l.makingAmount ?? 0);
@@ -868,24 +873,19 @@ export class BillingService {
    *     "Mixed Silver Jewellery" / consolidated silver line's total weight).
    */
   private async insertInvoiceCoverages(
-    invoice: { id: number; customerId: number | null; invoiceNumber: string; items: { quantity: number; weightG: any; itemNumber: string | null }[] },
+    invoice: { id: number; customerId: number | null; invoiceNumber: string; items: { quantity: number; weightG: any; totalWeightG?: any; lessWeightG?: any; itemNumber: string | null }[] },
     coverages: { estimateId: number; silverAllocatedG: number }[],
   ) {
     const r3 = (n: number) => Math.round(n * 1000) / 1000;
-    // Only the "Mixed Silver Jewellery" line's grams (times quantity) count
-    // toward the invoice's silver-total cap for coverages. Falls back to
-    // total invoice weight if no such line is present.
-    let capG = 0;
-    for (const it of invoice.items) {
-      if (it.itemNumber && it.itemNumber.toLowerCase().includes('mixed silver')) {
-        capG += Number(it.quantity ?? 0) * Number(it.weightG ?? 0);
-      }
-    }
+    // Only the "Mixed Silver Jewellery" line's NET grams count toward the
+    // invoice's silver-total cap for coverages. Falls back to total invoice
+    // net weight if no such line is present. Net = Total Gross − Less.
+    const mixedLines = invoice.items.filter(
+      (it) => it.itemNumber && it.itemNumber.toLowerCase().includes('mixed silver'),
+    );
+    let capG = this.netWeightOfItems(mixedLines);
     if (capG <= 0) {
-      capG = invoice.items.reduce(
-        (s, it) => s + Number(it.quantity ?? 0) * Number(it.weightG ?? 0),
-        0,
-      );
+      capG = this.netWeightOfItems(invoice.items);
     }
     capG = r3(capG);
     const totalGrams = r3(coverages.reduce((s, c) => s + Number(c.silverAllocatedG ?? 0), 0));
@@ -899,7 +899,7 @@ export class BillingService {
     const estimates = await this.prisma.invoice.findMany({
       where: { id: { in: estimateIds } },
       include: {
-        items:      { select: { quantity: true, weightG: true } },
+        items:      { select: { quantity: true, weightG: true, totalWeightG: true, lessWeightG: true } },
         coveredBy:  { select: { silverAllocatedG: true } },
       },
     });
@@ -921,10 +921,7 @@ export class BillingService {
       if (!(g > 0)) {
         throw new BadRequestException(`${est.invoiceNumber}: coverage grams must be positive.`);
       }
-      const derivedWt = est.items.reduce(
-        (s, it) => s + Number(it.quantity ?? 0) * Number(it.weightG ?? 0),
-        0,
-      );
+      const derivedWt = this.netWeightOfItems(est.items);
       const required = r3(
         est.totalWeightG != null && Number(est.totalWeightG) > 0
           ? Number(est.totalWeightG)
@@ -947,10 +944,7 @@ export class BillingService {
     }>();
     for (const cov of coverages as any[]) {
       const est = byId.get(cov.estimateId)!;
-      const derivedWt = est.items.reduce(
-        (s: number, it: any) => s + Number(it.quantity ?? 0) * Number(it.weightG ?? 0),
-        0,
-      );
+      const derivedWt = this.netWeightOfItems(est.items);
       const required = r3(
         est.totalWeightG != null && Number(est.totalWeightG) > 0
           ? Number(est.totalWeightG)
@@ -991,6 +985,29 @@ export class BillingService {
     // shows the same boxes ticked.
   }
 
+  /**
+   * Net weight (grams) of a set of invoice lines — the weight billing
+   * actually works on. Per operator spec silver + making are charged on
+   * NET (= Total Gross − Less), never on Gross. For each line:
+   *   grossLine = typed line total (totalWeightG) when set, else weightG × qty
+   *   lessLine  = lessWeightG × qty
+   *   netLine   = max(0, grossLine − lessLine)
+   * Reduces to plain gross when no Less Wt is set, so simple invoices are
+   * unaffected. Mirrors compute()'s per-line `totalWeight`.
+   */
+  private netWeightOfItems(
+    items: Array<{ quantity?: any; weightG?: any; totalWeightG?: any; lessWeightG?: any }>,
+  ): number {
+    return items.reduce((s, it) => {
+      const qty = Number(it.quantity ?? 0);
+      const gross = it.totalWeightG != null && Number(it.totalWeightG) > 0
+        ? Number(it.totalWeightG)
+        : Number(it.weightG ?? 0) * qty;
+      const less = Number(it.lessWeightG ?? 0) * qty;
+      return s + Math.max(0, gross - less);
+    }, 0);
+  }
+
   async listInvoices(q: { type?: InvoiceTypeStr; customerId?: number; status?: string; search?: string; fromDate?: string; toDate?: string }) {
     const where: Prisma.InvoiceWhereInput = {};
     if (q.type) where.type = q.type as any;
@@ -1015,7 +1032,7 @@ export class BillingService {
         // Pull extraAmount when the list is estimates so the coverage-
         // picker gets each row's "Other Charges" (additional only) total
         // for free.
-        items: { select: { quantity: true, weightG: true, extraAmount: true } },
+        items: { select: { quantity: true, weightG: true, totalWeightG: true, lessWeightG: true, extraAmount: true } },
       },
       // Sort by invoice number ascending — every list is already filtered
       // to one type, so the alphabetic sort keeps the sequence in numeric
@@ -1047,10 +1064,9 @@ export class BillingService {
     // full item arrays into the UI. totalWeightG (header override) wins over
     // the derived sum when it's set; otherwise fall back to Σ(qty × wt/pc).
     return rows.map((inv) => {
-      const derivedWt = inv.items.reduce(
-        (s, it) => s + Number(it.quantity ?? 0) * Number(it.weightG ?? 0),
-        0,
-      );
+      // NET weight (Total Gross − Less) — billing works on net, so list
+      // rollups + estimate silver-requirement must reflect net, not gross.
+      const derivedWt = this.netWeightOfItems(inv.items);
       const totalPieces = inv.items.reduce((s, it) => s + Number(it.quantity ?? 0), 0);
       const totalWeight = inv.totalWeightG != null && Number(inv.totalWeightG) > 0
         ? Number(inv.totalWeightG)
@@ -1091,7 +1107,7 @@ export class BillingService {
           include: {
             estimate: {
               include: {
-                items:      { select: { quantity: true, weightG: true } },
+                items:      { select: { quantity: true, weightG: true, totalWeightG: true, lessWeightG: true } },
                 coveredBy:  { select: { silverAllocatedG: true } },
               },
             },
@@ -1119,10 +1135,7 @@ export class BillingService {
         remainingG = Number(c.snapshotRemainingG);
         status     = c.snapshotStatus ?? 'OPEN';
       } else {
-        const derivedWt = est.items.reduce(
-          (s: number, it: any) => s + Number(it.quantity ?? 0) * Number(it.weightG ?? 0),
-          0,
-        );
+        const derivedWt = this.netWeightOfItems(est.items);
         requiredG = r3(
           est.totalWeightG != null && Number(est.totalWeightG) > 0
             ? Number(est.totalWeightG)

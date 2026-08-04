@@ -120,7 +120,7 @@ export default function InvoiceDetailPage() {
                 <th className="px-4 py-2">Description</th>
                 <th className="px-4 py-2">HSN</th>
                 <th className="px-4 py-2 text-right">Qty</th>
-                <th className="px-4 py-2 text-right">Wt/pc (g)</th>
+                <th className="px-4 py-2 text-right">Net Wt (g)</th>
                 <th className="px-4 py-2 text-right">Silver /g</th>
                 <th className="px-4 py-2 text-right">Making /g</th>
                 <th className="px-4 py-2 text-right">Amount</th>
@@ -134,7 +134,17 @@ export default function InvoiceDetailPage() {
                   <td className="px-4 py-2">{it.description}</td>
                   <td className="px-4 py-2 text-xs">{it.hsnCode}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{it.quantity}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{Number(it.weightG).toFixed(3)}</td>
+                  {/* Net line weight (Total Gross − Less) — billing works on
+                      net, so the detail table mirrors it. Falls back to
+                      weightG × qty when no typed total / less is present. */}
+                  <td className="px-4 py-2 text-right tabular-nums">{(() => {
+                    const qty = Number(it.quantity || 0);
+                    const gross = it.totalWeightG != null && Number(it.totalWeightG) > 0
+                      ? Number(it.totalWeightG)
+                      : Number(it.weightG || 0) * qty;
+                    const less = Number(it.lessWeightG || 0) * qty;
+                    return Math.max(0, gross - less).toFixed(3);
+                  })()}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{Number(it.silverRatePerG).toFixed(2)}</td>
                   <td className="px-4 py-2 text-right tabular-nums">{Number(it.makingRatePerG).toFixed(2)}</td>
                   <td className="px-4 py-2 text-right tabular-nums font-medium">
