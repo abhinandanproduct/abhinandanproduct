@@ -59,6 +59,14 @@ export default function PaymentsPage() {
         : Promise.resolve([]),
     enabled: !!form.customerId && form.kind === 'METAL',
   });
+  const silverVariantsQ = useQuery<any[]>({
+    queryKey: ['silver-variants'],
+    queryFn: () => Api.materials.variants({ status: 'ACTIVE' }),
+    enabled: form.kind === 'METAL',
+  });
+  // Advance metal is mostly Silver 999; default to it.
+  const silverVariants = (silverVariantsQ.data ?? []).filter((v: any) => /^SILV-(999|935)$/i.test(v.variantCode ?? ''));
+  const default999Id = silverVariants.find((v: any) => /999/.test(v.variantCode))?.id;
 
   const create = useMutation({
     mutationFn: () =>
@@ -70,6 +78,7 @@ export default function PaymentsPage() {
             mode: form.mode || 'OTHER',
             kind: 'METAL',
             weightG: Number(form.weightG),
+            variantId: form.variantId ? Number(form.variantId) : (default999Id ?? undefined),
             estimateId: form.estimateId ? Number(form.estimateId) : undefined,
             reference: form.reference || undefined,
             notes: form.notes || undefined,
@@ -213,6 +222,18 @@ export default function PaymentsPage() {
           </Field>
           {form.kind === 'METAL' ? (
             <>
+              <Field label="Silver purity">
+                <select
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={form.variantId ?? default999Id ?? ''}
+                  onChange={(e) => setForm({ ...form, variantId: Number(e.target.value) })}
+                >
+                  {silverVariants.length === 0 && <option value="">Silver 999 (default)</option>}
+                  {silverVariants.map((v: any) => (
+                    <option key={v.id} value={v.id}>{v.variantName}</option>
+                  ))}
+                </select>
+              </Field>
               <Field label="Silver received (g) *">
                 <Input type="number" step="0.001" value={form.weightG ?? ''} onChange={(e) => setForm({ ...form, weightG: e.target.value })} placeholder="0.000" />
               </Field>

@@ -1705,9 +1705,12 @@ export class BillingService {
     if (dto.kind === 'METAL') {
       const weightG = r3(Number(dto.weightG ?? 0));
       if (weightG <= 0) throw new BadRequestException('Metal weight (g) must be > 0.');
+      // Advance metal is mostly Silver 999, so default to it when the caller
+      // doesn't pick a variant.
       const variant = dto.variantId
         ? await this.prisma.materialVariant.findUnique({ where: { id: dto.variantId } })
-        : await this.prisma.materialVariant.findFirst({ where: { variantCode: 'SILV-935' } });
+        : (await this.prisma.materialVariant.findFirst({ where: { variantCode: 'SILV-999' } })
+           ?? await this.prisma.materialVariant.findFirst({ where: { variantCode: 'SILV-935' } }));
       if (!variant) throw new BadRequestException('Pick a silver variant for the metal receipt.');
       if (!variant.trackByWeight) throw new BadRequestException(`"${variant.variantName}" is not weight-tracked.`);
       const paymentNumber = await nextCode(this.prisma, 'payment', 'paymentNumber', 'RCT', 4);
