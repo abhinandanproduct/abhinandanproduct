@@ -333,6 +333,48 @@ export function BillingDocList({
           )}
         </CardContent>
       </Card>
+
+      {/* Totals summary — always visible (mobile + desktop). For estimates
+          it surfaces the silver required / allocated / still-to-allocate
+          roll-up; every list shows the money totals. */}
+      {sorted.length > 0 && (() => {
+        const n = (x: any) => Number(x ?? 0);
+        const totalAmt   = sorted.reduce((s, r) => s + n(r.totalAmount), 0);
+        const totalBal   = sorted.reduce((s, r) => s + n(r.balanceAmount), 0);
+        const totalReq   = sorted.reduce((s, r) => s + n(r.summary?.silverRequiredG), 0);
+        const totalAlloc = sorted.reduce((s, r) => s + n(r.summary?.silverAllocatedG), 0);
+        const totalLeft  = sorted.reduce((s, r) => s + Math.max(0, n(r.summary?.silverRequiredG) - n(r.summary?.silverAllocatedG)), 0);
+        const money = (v: number) => `₹${v.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+        return (
+          <Card>
+            <CardContent className="p-3 sm:p-4">
+              <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                Summary · {sorted.length} {isEstimate ? 'estimate' : 'document'}{sorted.length === 1 ? '' : 's'}
+              </div>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                {isEstimate && <SummaryStat label="Silver required" value={`${totalReq.toFixed(3)} g`} />}
+                {isEstimate && <SummaryStat label="Allocated" value={`${totalAlloc.toFixed(3)} g`} tone="success" />}
+                {isEstimate && <SummaryStat label="Left to allocate" value={`${totalLeft.toFixed(3)} g`} tone="warning" />}
+                <SummaryStat label="Total" value={money(totalAmt)} />
+                <SummaryStat label="Balance due" value={money(totalBal)} tone="warning" />
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
+    </div>
+  );
+}
+
+function SummaryStat({ label, value, tone }: { label: string; value: string; tone?: 'success' | 'warning' }) {
+  const valueTone =
+    tone === 'success' ? 'text-success'
+    : tone === 'warning' ? 'text-warning'
+    : 'text-foreground';
+  return (
+    <div className="rounded-lg border border-border bg-secondary/20 px-3 py-2">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className={`mt-0.5 text-sm font-bold tabular-nums ${valueTone}`}>{value}</div>
     </div>
   );
 }
