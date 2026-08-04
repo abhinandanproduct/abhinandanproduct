@@ -3,9 +3,10 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, FileText, Search, Ban, Printer, Trash2 } from 'lucide-react';
+import { Plus, FileText, Search, Ban, Printer, Trash2, Share2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Api, getApiError } from '@/lib/api';
+import { sharePdfFile } from '@/lib/share';
 import { useFiscalYear } from '@/lib/fiscal-year';
 import { PageHeader } from '@/components/shared/page-header';
 import { Button } from '@/components/ui/button';
@@ -122,6 +123,10 @@ export default function InvoicesPage() {
                         <Button variant="outline" size="icon" title="Print"
                           onClick={() => window.open(Api.billing.invoicePdfUrl(inv.id), '_blank')}>
                           <Printer className="size-4" />
+                        </Button>
+                        <Button variant="outline" size="icon" title="Share PDF file"
+                          onClick={() => sharePdfFile(Api.billing.invoicePdfUrl(inv.id), inv.invoiceNumber, (m) => toast.error(m))}>
+                          <Share2 className="size-4" />
                         </Button>
                         {inv.status !== 'CANCELLED' && (
                           <Button variant="outline" size="icon" className="text-warning hover:bg-warning/10"

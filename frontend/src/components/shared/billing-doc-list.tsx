@@ -3,9 +3,10 @@
 import * as React from 'react';
 import Link from 'next/link';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Search, Ban, Printer, Trash2, FileText, MoreVertical } from 'lucide-react';
+import { Plus, Search, Ban, Printer, Trash2, FileText, MoreVertical, Share2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Api, getApiError } from '@/lib/api';
+import { sharePdfFile } from '@/lib/share';
 import { useFiscalYear } from '@/lib/fiscal-year';
 import { PageHeader } from '@/components/shared/page-header';
 import { Button } from '@/components/ui/button';
@@ -133,6 +134,12 @@ export function BillingDocList({
       label: 'Print',
       icon: Printer,
       onClick: () => window.open(Api.billing.invoicePdfUrl(inv.id), '_blank'),
+    },
+    {
+      key: 'share',
+      label: 'Share PDF',
+      icon: Share2,
+      onClick: () => sharePdfFile(Api.billing.invoicePdfUrl(inv.id), inv.invoiceNumber, (m) => toast.error(m)),
     },
     ...(inv.status !== 'CANCELLED' ? [{
       key: 'cancel',
@@ -354,7 +361,7 @@ export function BillingDocList({
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                 {isEstimate && <SummaryStat label="Silver required" value={`${totalReq.toFixed(3)} g`} />}
                 {isEstimate && <SummaryStat label="Allocated" value={`${totalAlloc.toFixed(3)} g`} tone="success" />}
-                {isEstimate && <SummaryStat label="Left to allocate" value={`${totalLeft.toFixed(3)} g`} tone="warning" />}
+                {isEstimate && <SummaryStat label="Metal due" value={`${totalLeft.toFixed(3)} g`} tone="warning" />}
                 <SummaryStat label="Total" value={money(totalAmt)} />
                 <SummaryStat label="Balance due" value={money(totalBal)} tone="warning" />
               </div>

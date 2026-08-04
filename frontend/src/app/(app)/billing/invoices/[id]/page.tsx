@@ -3,10 +3,11 @@
 import * as React from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Printer, Ban, ArrowRight, FileText, Pencil } from 'lucide-react';
+import { Printer, Ban, ArrowRight, FileText, Pencil, Share2 } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { Api, getApiError } from '@/lib/api';
+import { sharePdfFile } from '@/lib/share';
 import { PageHeader } from '@/components/shared/page-header';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -84,6 +85,9 @@ export default function InvoiceDetailPage() {
             )}
             <Button variant="outline" onClick={() => window.open(pdfUrl, '_blank')}>
               <Printer className="size-4" /> Print
+            </Button>
+            <Button variant="outline" onClick={() => sharePdfFile(pdfUrl, inv.invoiceNumber, (m) => toast.error(m))}>
+              <Share2 className="size-4" /> Share
             </Button>
             {inv.status !== 'CANCELLED' && (
               <Button variant="outline" className="text-destructive" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
