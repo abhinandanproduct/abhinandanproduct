@@ -243,7 +243,7 @@ export default function PaymentsPage() {
                   onChange={(v) => setForm({ ...form, estimateId: v })}
                   placeholder="— link an estimate —"
                   options={(estimatesQ.data ?? [])
-                    .filter((e: any) => (e.summary?.silverStatus ?? 'OPEN') !== 'CLOSED')
+                    .filter((e: any) => e.status !== 'CANCELLED' && (e.summary?.silverStatus ?? 'OPEN') !== 'CLOSED')
                     .map((e: any) => ({
                       value: e.id,
                       label: e.invoiceNumber,
