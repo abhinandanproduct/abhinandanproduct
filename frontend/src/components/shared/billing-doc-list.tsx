@@ -309,31 +309,35 @@ export function BillingDocList({
                   <tr><td colSpan={isEstimate ? 10 : 7} className="px-4 py-12 text-center text-muted-foreground">Nothing here yet.</td></tr>
                 )}
               </tbody>
-              {sorted.length > 0 && (
-                <tfoot>
+              {sorted.length > 0 && (() => {
+                  // Totals exclude CANCELLED documents (void).
+                  const act = sorted.filter((r: any) => r.status !== 'CANCELLED');
+                  return (
+                  <tfoot>
                   <tr className="border-t-2 border-border bg-secondary/40 text-xs font-bold uppercase tracking-wider text-foreground">
-                    <td className="px-2 py-2" colSpan={isEstimate ? 4 : 4}>Total ({sorted.length} row{sorted.length === 1 ? '' : 's'})</td>
+                    <td className="px-2 py-2" colSpan={isEstimate ? 4 : 4}>Total ({act.length} row{act.length === 1 ? '' : 's'})</td>
                     {isEstimate && (
                       <>
                         <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap">
-                          {sorted.reduce((s: number, r: any) => s + Number(r.summary?.silverRequiredG ?? 0), 0).toFixed(3)}
+                          {act.reduce((s: number, r: any) => s + Number(r.summary?.silverRequiredG ?? 0), 0).toFixed(3)}
                         </td>
                         <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap">
-                          {sorted.reduce((s: number, r: any) => s + Number(r.summary?.silverAllocatedG ?? 0), 0).toFixed(3)}
+                          {act.reduce((s: number, r: any) => s + Number(r.summary?.silverAllocatedG ?? 0), 0).toFixed(3)}
                         </td>
                         <td className="px-2 py-2" />
                       </>
                     )}
                     <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap">
-                      ₹{sorted.reduce((s: number, r: any) => s + Number(r.totalAmount ?? 0), 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      ₹{act.reduce((s: number, r: any) => s + Number(r.totalAmount ?? 0), 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
                     <td className="px-2 py-2 text-right tabular-nums whitespace-nowrap text-warning">
-                      ₹{sorted.reduce((s: number, r: any) => s + Number(r.balanceAmount ?? 0), 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      ₹{act.reduce((s: number, r: any) => s + Number(isEstimate ? (r.summary?.moneyBalanceDue ?? 0) : (r.balanceAmount ?? 0)), 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </td>
                     <td className="px-2 py-2" />
                   </tr>
                 </tfoot>
-              )}
+                  );
+                })()}
             </table>
             </div>
             </>
@@ -346,19 +350,23 @@ export function BillingDocList({
           roll-up; every list shows the money totals. */}
       {sorted.length > 0 && (() => {
         const n = (x: any) => Number(x ?? 0);
-        const totalAmt   = sorted.reduce((s, r) => s + n(r.totalAmount), 0);
+        // CANCELLED documents must never count toward the totals — a cancelled
+        // estimate's silver/money is void.
+        const active = sorted.filter((r) => r.status !== 'CANCELLED');
+        const totalAmt   = active.reduce((s, r) => s + n(r.totalAmount), 0);
         // Estimates owe money via their linked tax invoices; other docs owe
         // their own money balance.
-        const totalBal   = sorted.reduce((s, r) => s + n(isEstimate ? r.summary?.moneyBalanceDue : r.balanceAmount), 0);
-        const totalReq   = sorted.reduce((s, r) => s + n(r.summary?.silverRequiredG), 0);
-        const totalAlloc = sorted.reduce((s, r) => s + n(r.summary?.silverAllocatedG), 0);
-        const totalLeft  = sorted.reduce((s, r) => s + Math.max(0, n(r.summary?.silverRequiredG) - n(r.summary?.silverAllocatedG)), 0);
+        const totalBal   = active.reduce((s, r) => s + n(isEstimate ? r.summary?.moneyBalanceDue : r.balanceAmount), 0);
+        const totalReq   = active.reduce((s, r) => s + n(r.summary?.silverRequiredG), 0);
+        const totalAlloc = active.reduce((s, r) => s + n(r.summary?.silverAllocatedG), 0);
+        const totalLeft  = active.reduce((s, r) => s + Math.max(0, n(r.summary?.silverRequiredG) - n(r.summary?.silverAllocatedG)), 0);
         const money = (v: number) => `₹${v.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
         return (
           <Card>
             <CardContent className="p-3 sm:p-4">
               <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                Summary · {sorted.length} {isEstimate ? 'estimate' : 'document'}{sorted.length === 1 ? '' : 's'}
+                Summary · {active.length} {isEstimate ? 'estimate' : 'document'}{active.length === 1 ? '' : 's'}
+                {active.length !== sorted.length && ` (${sorted.length - active.length} cancelled excluded)`}
               </div>
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                 {isEstimate && <SummaryStat label="Silver required" value={`${totalReq.toFixed(3)} g`} />}
