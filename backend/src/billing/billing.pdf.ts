@@ -143,14 +143,20 @@ export function streamInvoicePdf(res: Response, inv: InvoiceData) {
     draw(doc, inv);
   }
 
-  // Simple page numbers (1, 2, 3 …) at the bottom-right of every page.
+  // Simple page numbers (1, 2, 3 …) at the bottom-right corner of every page.
+  // IMPORTANT: writing below the bottom margin makes PDFKit think the page
+  // overflowed and auto-append a blank page — so zero the bottom margin while
+  // stamping, then restore it.
   const range = doc.bufferedPageRange();
   for (let i = 0; i < range.count; i++) {
     doc.switchToPage(range.start + i);
     const pw = doc.page.width;
     const ph = doc.page.height;
+    const savedBottom = doc.page.margins.bottom;
+    doc.page.margins.bottom = 0;
     doc.font('Helvetica').fontSize(8).fillColor('#555')
       .text(String(i + 1), pw - 24 - 60, ph - 18, { width: 60, align: 'right', lineBreak: false });
+    doc.page.margins.bottom = savedBottom;
   }
 
   doc.end();
