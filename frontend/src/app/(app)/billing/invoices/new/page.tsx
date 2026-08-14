@@ -118,6 +118,19 @@ const newOtherChargesRow = (amount: number): LineRow => ({
   extraAmount: amount.toFixed(2),
 });
 
+// Excel-style sequence letter: 0→A, 1→B … 25→Z, 26→AA. Used to auto-name
+// repeated same-item lines A, B, C, D … in an estimate.
+const seqLetter = (n: number): string => {
+  let s = '';
+  let x = n + 1;
+  while (x > 0) {
+    const r = (x - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    x = Math.floor((x - 1) / 26);
+  }
+  return s;
+};
+
 // Gross line total (g) — operator-typed total wins, else weightG × qty.
 const grossLineWt = (l: { totalWtG?: string; weightG?: string; quantity?: string }): number =>
   l.totalWtG ? Number(l.totalWtG) : Number(l.weightG || 0) * Number(l.quantity || 0);
@@ -877,32 +890,43 @@ export default function NewInvoicePage() {
                             const mv = piece ? null : (variantsQ.data ?? []).find((m: any) =>
                               (m.variantCode === typed) || (m.variantName === typed)
                             );
-                            setLines((rs) => rs.map((r, i) => {
-                              if (i !== idx) return r;
-                              if (piece) {
-                                return {
-                                  ...r,
-                                  itemId: piece.itemId,
-                                  variantId: '',
-                                  itemNumber: piece.itemNumber ?? typed,
-                                  description: piece.description ?? r.description,
-                                  weightG: piece.perPieceWeightG ? String(piece.perPieceWeightG) : r.weightG,
-                                };
-                              }
-                              if (mv) {
-                                return {
-                                  ...r,
-                                  itemId: '',
-                                  variantId: mv.id,
-                                  itemNumber: mv.variantCode ?? typed,
-                                  description: mv.variantName ?? mv.materialName ?? r.description,
-                                  hsnCode: mv.hsnCode ?? r.hsnCode,
-                                };
-                              }
-                              // Custom text — clear any master link and
-                              // just keep the typed name.
-                              return { ...r, itemId: '', variantId: '', itemNumber: typed };
-                            }));
+                            setLines((rs) => {
+                              // Effective item number this line takes on.
+                              const effNum = String(piece?.itemNumber ?? mv?.variantCode ?? typed ?? '').trim();
+                              // Auto-description = A, B, C … by how many OTHER lines
+                              // already carry the same item number. First one → A,
+                              // next → B, and so on. Blank number → no auto letter.
+                              const occ = effNum
+                                ? rs.filter((l, i) => i !== idx && String(l.itemNumber || '').trim().toUpperCase() === effNum.toUpperCase()).length
+                                : -1;
+                              const autoDesc = occ >= 0 ? seqLetter(occ) : '';
+                              return rs.map((r, i) => {
+                                if (i !== idx) return r;
+                                if (piece) {
+                                  return {
+                                    ...r,
+                                    itemId: piece.itemId,
+                                    variantId: '',
+                                    itemNumber: piece.itemNumber ?? typed,
+                                    description: autoDesc || (piece.description ?? r.description),
+                                    weightG: piece.perPieceWeightG ? String(piece.perPieceWeightG) : r.weightG,
+                                  };
+                                }
+                                if (mv) {
+                                  return {
+                                    ...r,
+                                    itemId: '',
+                                    variantId: mv.id,
+                                    itemNumber: mv.variantCode ?? typed,
+                                    description: autoDesc || (mv.variantName ?? mv.materialName ?? r.description),
+                                    hsnCode: mv.hsnCode ?? r.hsnCode,
+                                  };
+                                }
+                                // Custom text — keep the typed name; auto-letter
+                                // the description by occurrence of this number.
+                                return { ...r, itemId: '', variantId: '', itemNumber: typed, description: autoDesc || r.description };
+                              });
+                            });
                           }}
                           className="px-2 text-sm"
                         />
