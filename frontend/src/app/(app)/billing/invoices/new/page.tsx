@@ -967,15 +967,14 @@ export default function NewInvoicePage() {
                             className="text-right px-2 text-sm"
                             title="Net weight — silver only. Less = Gross − Net is auto-calculated. Blank ⇒ Net = Gross." />
                         </label>
-                        {(() => {
-                          const gross = grossLineWt(l);
-                          const less = Math.max(0, gross - netLineWt(l));
-                          return gross > 0 ? (
-                            <div className="mt-1 rounded bg-secondary/40 px-1.5 py-0.5 text-right text-[10px] text-muted-foreground">
-                              Less = <b className="text-foreground tabular-nums">{less.toFixed(3)} g</b>
-                            </div>
-                          ) : null;
-                        })()}
+                        {/* Less — read-only, auto-calculated = Gross − Net. */}
+                        <label className="mt-1.5 block">
+                          <span className="mb-0.5 block text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Less (auto)</span>
+                          <Input type="text" readOnly tabIndex={-1}
+                            value={Math.max(0, grossLineWt(l) - netLineWt(l)).toFixed(3)}
+                            className="cursor-default border-dashed bg-secondary/40 text-right px-2 text-sm text-muted-foreground"
+                            title="Less = Gross − Net (auto-calculated, read-only)." />
+                        </label>
                       </td>
                       {type !== 'DELIVERY_CHALLAN' && (
                         <>
