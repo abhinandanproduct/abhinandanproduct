@@ -412,7 +412,7 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
               // description; TOTAL row drops " g" so weight sums up to
               // 5 digits fit without truncation.
               { label: '#',                  w: 18,  align: 'center' },
-              { label: 'Item & Description', w: 80,  align: 'left'   },
+              { label: 'Item & Description', w: 92,  align: 'left'   },
               { label: 'HSN/SAC',            w: 38,  align: 'center' },
               { label: 'Qty',                w: 24,  align: 'right'  },
               { label: 'Wt/pc',              w: 44,  align: 'right'  },
@@ -421,11 +421,13 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
               { label: 'Net Wt',             w: 48,  align: 'right'  },
               { label: 'Silver',             w: 78,  align: 'right'  },
               { label: 'Making',             w: 78,  align: 'right'  },
-              { label: 'Addl Chrg',          w: 58,  align: 'right'  },
+              { label: 'Addl Chrg',          w: 64,  align: 'right'  },
               { label: 'S + M + A',          w: 78,  align: 'right'  },
               { label: `IGST ${fmtPct(gstPct)}%`, w: 68,  align: 'right'  },
-              { label: 'Amount',             w: 92,  align: 'right'  },
-              // sum: 18+80+38+24+44+48+42+48+78+78+58+78+68+92 = 794
+              // Amount total is now plain (no "Rs."), so it needs less width;
+              // the freed space went to Item & Description + Addl Chrg.
+              { label: 'Amount',             w: 74,  align: 'right'  },
+              // sum: 18+92+38+24+44+48+42+48+78+78+64+78+68+74 = 794
             ]
         : compactMoneyCols
           ? [
@@ -459,7 +461,7 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
               // the TOTAL row drops its " g" suffix so 5-digit totals
               // like "20,000.000" print without truncation either.
               { label: '#',                  w: 18, align: 'center' },
-              { label: 'Item & Description', w: 64, align: 'left'   },
+              { label: 'Item & Description', w: 72, align: 'left'   },
               { label: 'HSN/SAC',            w: 32, align: 'center' },
               { label: 'Qty',                w: 22, align: 'right'  },
               { label: 'Wt/pc',              w: 42, align: 'right'  },
@@ -472,8 +474,9 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
               { label: 'S + M + A',          w: 78, align: 'right'  },
               { label: `CGST ${fmtPct(halfPct)}%`, w: 56, align: 'right' },
               { label: `SGST ${fmtPct(halfPct)}%`, w: 56, align: 'right' },
-              { label: 'Amount',             w: 78, align: 'right'  },
-              // sum: 18+64+32+22+42+48+40+48+78+78+56+78+56+56+78 = 794
+              // Amount plain (no "Rs.") → trimmed; extra space to Item column.
+              { label: 'Amount',             w: 72, align: 'right'  },
+              // sum: 18+72+32+22+42+48+40+48+78+78+56+78+56+56+72 = 794
             ]
       : [
           // No-tax layout (13 cols · 794pt). Extra headroom on money
