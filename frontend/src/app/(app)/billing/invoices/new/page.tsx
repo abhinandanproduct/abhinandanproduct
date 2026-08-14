@@ -1106,7 +1106,7 @@ export default function NewInvoicePage() {
                         <Input
                           type="number" step="0.001"
                           className="h-7 w-24 text-right"
-                          placeholder={lines.reduce((s, l) => s + (l.totalWtG ? Number(l.totalWtG) : Number(l.weightG || 0) * Number(l.quantity || 0)), 0).toFixed(3)}
+                          placeholder={lines.reduce((s, l) => s + netLineWt(l), 0).toFixed(3)}
                           value={totalWeightG}
                           onChange={(e) => setTotalWeightG(e.target.value)}
                           title="Override the calculated sum — e.g. include tare, dust, or a physical dispatch weight."
@@ -1114,7 +1114,7 @@ export default function NewInvoicePage() {
                         <span className="text-text-faint">g</span>
                       </div>
                     ) : (
-                      <>{lines.reduce((s, l) => s + (l.totalWtG ? Number(l.totalWtG) : Number(l.weightG || 0) * Number(l.quantity || 0)), 0).toFixed(3)} g</>
+                      <>{lines.reduce((s, l) => s + netLineWt(l), 0).toFixed(3)} g <span className="text-[9px] font-normal text-text-faint">net</span></>
                     )}
                   </td>
                   {type !== 'DELIVERY_CHALLAN' && (
