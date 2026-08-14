@@ -942,27 +942,39 @@ export default function NewInvoicePage() {
                           snapshotted so the PDF prints the exact typed total
                           (no per-piece drift). Net blank ⇒ Net = Gross. */}
                       <td className="px-2 py-2 align-top">
-                        <Input type="number" step="0.001"
-                          placeholder="Gross"
-                          value={l.totalWtG || (l.weightG && Number(l.quantity) > 0
-                            ? (Number(l.weightG) * Number(l.quantity)).toFixed(3)
-                            : '')}
-                          onChange={(e) => setLines((rs) => rs.map((r, i) => i === idx ? {
-                            ...r, totalWtG: e.target.value, weightG: '',
-                          } : r))}
-                          className="text-right px-2 text-sm"
-                          title="Gross weight — full line total with stones / findings." />
-                        <Input type="number" step="0.001"
-                          placeholder={grossLineWt(l) > 0 ? grossLineWt(l).toFixed(3) : 'Net'}
-                          value={l.netWtG}
-                          onChange={(e) => setLines((rs) => rs.map((r, i) => i === idx ? { ...r, netWtG: e.target.value } : r))}
-                          className="mt-1 text-right px-2 text-sm"
-                          title="Net weight — silver only. Less = Gross − Net is auto-calculated. Blank ⇒ Net = Gross." />
+                        {/* Operator enters GROSS + NET; LESS = Gross − Net is
+                            auto-calculated and shown read-only. Silver + making
+                            bill on Net. */}
+                        <label className="block">
+                          <span className="mb-0.5 block text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Gross</span>
+                          <Input type="number" step="0.001"
+                            placeholder="0.000"
+                            value={l.totalWtG || (l.weightG && Number(l.quantity) > 0
+                              ? (Number(l.weightG) * Number(l.quantity)).toFixed(3)
+                              : '')}
+                            onChange={(e) => setLines((rs) => rs.map((r, i) => i === idx ? {
+                              ...r, totalWtG: e.target.value, weightG: '',
+                            } : r))}
+                            className="text-right px-2 text-sm"
+                            title="Gross weight — full line total with stones / findings." />
+                        </label>
+                        <label className="mt-1.5 block">
+                          <span className="mb-0.5 block text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">Net (silver)</span>
+                          <Input type="number" step="0.001"
+                            placeholder={grossLineWt(l) > 0 ? grossLineWt(l).toFixed(3) : '0.000'}
+                            value={l.netWtG}
+                            onChange={(e) => setLines((rs) => rs.map((r, i) => i === idx ? { ...r, netWtG: e.target.value } : r))}
+                            className="text-right px-2 text-sm"
+                            title="Net weight — silver only. Less = Gross − Net is auto-calculated. Blank ⇒ Net = Gross." />
+                        </label>
                         {(() => {
-                          const less = Math.max(0, grossLineWt(l) - netLineWt(l));
-                          return less > 0.0005
-                            ? <div className="mt-0.5 text-right text-[10px] text-muted-foreground">Less {less.toFixed(3)} g</div>
-                            : null;
+                          const gross = grossLineWt(l);
+                          const less = Math.max(0, gross - netLineWt(l));
+                          return gross > 0 ? (
+                            <div className="mt-1 rounded bg-secondary/40 px-1.5 py-0.5 text-right text-[10px] text-muted-foreground">
+                              Less = <b className="text-foreground tabular-nums">{less.toFixed(3)} g</b>
+                            </div>
+                          ) : null;
                         })()}
                       </td>
                       {type !== 'DELIVERY_CHALLAN' && (
