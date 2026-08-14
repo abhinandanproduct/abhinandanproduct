@@ -1188,7 +1188,10 @@ export class BillingService {
     const inv = await this.prisma.invoice.findUnique({
       where: { id },
       include: {
-        items: true,
+        // Always return line items in insertion order — without an explicit
+        // orderBy, Postgres yields rows in an arbitrary order, so the edit
+        // form (and PDF) would show the lines shuffled "up and down".
+        items: { orderBy: { id: 'asc' } },
         customer: true,
         allocations: { include: { payment: true } },
         // Coverages this invoice creates → the covered estimates (their
