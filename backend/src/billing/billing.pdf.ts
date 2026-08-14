@@ -19,6 +19,11 @@ const r3 = (n: number) => Math.round(n * 1000) / 1000;
 // "Rs." prefix everywhere so amounts read cleanly in the exported PDF.
 const inr = (n: number) =>
   'Rs. ' + Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Compact money without the "Rs." prefix — for the dense in-table TOTAL row,
+// where "Rs. 27,070.00" clips a narrow column (e.g. Addl Chrg). Matches the
+// line-item cells above (which also carry no "Rs."); the summary box keeps inr().
+const inrPlain = (n: number) =>
+  Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 interface InvoiceData {
   id: number;
@@ -121,6 +126,9 @@ export function streamInvoicePdf(res: Response, inv: InvoiceData) {
     size: 'A4',
     margin: 24,
     layout: isChallan || isPortraitInvoice ? 'portrait' : 'landscape',
+    // Buffer pages so we can stamp page numbers on every page after the
+    // whole document is laid out (we don't know the page count up front).
+    bufferPages: true,
   });
   doc.pipe(res);
   // Delivery Challan = goods-movement doc, totals-by-weight, no rates needed.
@@ -134,6 +142,17 @@ export function streamInvoicePdf(res: Response, inv: InvoiceData) {
   } else {
     draw(doc, inv);
   }
+
+  // Simple page numbers (1, 2, 3 …) at the bottom-right of every page.
+  const range = doc.bufferedPageRange();
+  for (let i = 0; i < range.count; i++) {
+    doc.switchToPage(range.start + i);
+    const pw = doc.page.width;
+    const ph = doc.page.height;
+    doc.font('Helvetica').fontSize(8).fillColor('#555')
+      .text(String(i + 1), pw - 24 - 60, ph - 18, { width: 60, align: 'right', lineBreak: false });
+  }
+
   doc.end();
 }
 
@@ -799,7 +818,7 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
       // lines isn't meaningful, so those totals cells stay blank. Only
       // Net Wt and Amount get filled in.
       totalsCells[4] = { v: totals.netWt.toFixed(3), align: 'right' };
-      totalsCells[8] = { v: inr(totals.sPlusM), align: 'right' };
+      totalsCells[8] = { v: inrPlain(totals.sPlusM), align: 'right' };
     } else {
       // Landscape: full breakdown row. " g" suffix omitted so 5-digit
       // total weights ("20,000.000") fit inside the same column width
@@ -808,23 +827,23 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
       totalsCells[5]  = { v: totals.grossWt.toFixed(3), align: 'right' };
       totalsCells[6]  = { v: totals.lessWt > 0 ? totals.lessWt.toFixed(3) : '—', align: 'right' };
       totalsCells[7]  = { v: totals.netWt.toFixed(3), align: 'right' };
-      totalsCells[8]  = { v: inr(totals.silver), align: 'right' };
-      totalsCells[9]  = { v: inr(totals.making), align: 'right' };
-      totalsCells[10] = { v: totals.extra > 0 ? inr(totals.extra) : '—', align: 'right' };
-      totalsCells[11] = { v: inr(totals.sPlusM), align: 'right' };
+      totalsCells[8]  = { v: inrPlain(totals.silver), align: 'right' };
+      totalsCells[9]  = { v: inrPlain(totals.making), align: 'right' };
+      totalsCells[10] = { v: totals.extra > 0 ? inrPlain(totals.extra) : '—', align: 'right' };
+      totalsCells[11] = { v: inrPlain(totals.sPlusM), align: 'right' };
       if (showTaxCols) {
         // After removing the % sub-columns the tax cells sit at index 12
         // (interstate: IGST Amt) or 12 & 13 (intra-state: CGST + SGST Amt).
         if (isInter) {
-          totalsCells[12] = { v: inr(totals.taxAmt), align: 'right' };
+          totalsCells[12] = { v: inrPlain(totals.taxAmt), align: 'right' };
         } else {
-          totalsCells[12] = { v: inr(totals.halfTax), align: 'right' };
-          totalsCells[13] = { v: inr(totals.halfTax), align: 'right' };
+          totalsCells[12] = { v: inrPlain(totals.halfTax), align: 'right' };
+          totalsCells[13] = { v: inrPlain(totals.halfTax), align: 'right' };
         }
       }
     }
     // Amount is always the last column regardless of tax layout.
-    totalsCells[cols.length - 1] = { v: inr(totals.amount), align: 'right' };
+    totalsCells[cols.length - 1] = { v: inrPlain(totals.amount), align: 'right' };
     let tx = M;
     for (let i = 0; i < cols.length; i++) {
       const c = cols[i];
