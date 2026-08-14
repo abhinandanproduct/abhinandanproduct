@@ -417,23 +417,24 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
               // so the design number always fits on one line above its
               // description; TOTAL row drops " g" so weight sums up to
               // 5 digits fit without truncation.
+              // Widths sized so the TOTAL row fits the unit-tagged values:
+              // weight totals "2887.330 g" (~52pt) and money totals with the
+              // "Rs." prefix "Rs. 6,06,910.00" (~66pt).
               { label: '#',                  w: 18,  align: 'center' },
-              { label: 'Item & Description', w: 92,  align: 'left'   },
-              { label: 'HSN/SAC',            w: 38,  align: 'center' },
+              { label: 'Item & Description', w: 88,  align: 'left'   },
+              { label: 'HSN/SAC',            w: 34,  align: 'center' },
               { label: 'Qty',                w: 24,  align: 'right'  },
-              { label: 'Wt/pc',              w: 44,  align: 'right'  },
-              { label: 'Gross Wt',           w: 48,  align: 'right'  },
-              { label: 'Less Wt',            w: 42,  align: 'right'  },
-              { label: 'Net Wt',             w: 48,  align: 'right'  },
-              { label: 'Silver',             w: 78,  align: 'right'  },
-              { label: 'Making',             w: 78,  align: 'right'  },
+              { label: 'Wt/pc',              w: 40,  align: 'right'  },
+              { label: 'Gross Wt',           w: 58,  align: 'right'  },
+              { label: 'Less Wt',            w: 56,  align: 'right'  },
+              { label: 'Net Wt',             w: 56,  align: 'right'  },
+              { label: 'Silver',             w: 74,  align: 'right'  },
+              { label: 'Making',             w: 68,  align: 'right'  },
               { label: 'Addl Chrg',          w: 64,  align: 'right'  },
-              { label: 'S + M + A',          w: 78,  align: 'right'  },
-              { label: `IGST ${fmtPct(gstPct)}%`, w: 68,  align: 'right'  },
-              // Amount total is now plain (no "Rs."), so it needs less width;
-              // the freed space went to Item & Description + Addl Chrg.
+              { label: 'S + M + A',          w: 76,  align: 'right'  },
+              { label: `IGST ${fmtPct(gstPct)}%`, w: 64,  align: 'right'  },
               { label: 'Amount',             w: 74,  align: 'right'  },
-              // sum: 18+92+38+24+44+48+42+48+78+78+64+78+68+74 = 794
+              // sum: 18+88+34+24+40+58+56+56+74+68+64+76+64+74 = 794
             ]
         : compactMoneyCols
           ? [
@@ -466,23 +467,24 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
               // above its description. Weight columns kept moderate;
               // the TOTAL row drops its " g" suffix so 5-digit totals
               // like "20,000.000" print without truncation either.
+              // Widths sized so the TOTAL row fits unit-tagged weights
+              // ("2887.330 g") and money with the "Rs." prefix.
               { label: '#',                  w: 18, align: 'center' },
-              { label: 'Item & Description', w: 72, align: 'left'   },
-              { label: 'HSN/SAC',            w: 32, align: 'center' },
+              { label: 'Item & Description', w: 74, align: 'left'   },
+              { label: 'HSN/SAC',            w: 30, align: 'center' },
               { label: 'Qty',                w: 22, align: 'right'  },
-              { label: 'Wt/pc',              w: 42, align: 'right'  },
-              { label: 'Gross Wt',           w: 48, align: 'right'  },
-              { label: 'Less Wt',            w: 40, align: 'right'  },
-              { label: 'Net Wt',             w: 48, align: 'right'  },
-              { label: 'Silver',             w: 78, align: 'right'  },
-              { label: 'Making',             w: 78, align: 'right'  },
-              { label: 'Addl Chrg',          w: 56, align: 'right'  },
-              { label: 'S + M + A',          w: 78, align: 'right'  },
-              { label: `CGST ${fmtPct(halfPct)}%`, w: 56, align: 'right' },
-              { label: `SGST ${fmtPct(halfPct)}%`, w: 56, align: 'right' },
-              // Amount plain (no "Rs.") → trimmed; extra space to Item column.
-              { label: 'Amount',             w: 72, align: 'right'  },
-              // sum: 18+72+32+22+42+48+40+48+78+78+56+78+56+56+72 = 794
+              { label: 'Wt/pc',              w: 36, align: 'right'  },
+              { label: 'Gross Wt',           w: 58, align: 'right'  },
+              { label: 'Less Wt',            w: 54, align: 'right'  },
+              { label: 'Net Wt',             w: 54, align: 'right'  },
+              { label: 'Silver',             w: 72, align: 'right'  },
+              { label: 'Making',             w: 64, align: 'right'  },
+              { label: 'Addl Chrg',          w: 62, align: 'right'  },
+              { label: 'S + M + A',          w: 72, align: 'right'  },
+              { label: `CGST ${fmtPct(halfPct)}%`, w: 52, align: 'right' },
+              { label: `SGST ${fmtPct(halfPct)}%`, w: 52, align: 'right' },
+              { label: 'Amount',             w: 74, align: 'right'  },
+              // sum: 18+74+30+22+36+58+54+54+72+64+62+72+52+52+74 = 794
             ]
       : [
           // No-tax layout (13 cols · 794pt). Extra headroom on money
@@ -826,33 +828,33 @@ function draw(doc: PDFKit.PDFDocument, inv: InvoiceData) {
       // Silver /g, Making /g, Addl /pc are RATE columns — a sum across
       // lines isn't meaningful, so those totals cells stay blank. Only
       // Net Wt and Amount get filled in.
-      totalsCells[4] = { v: totals.netWt.toFixed(3), align: 'right' };
-      totalsCells[8] = { v: inrPlain(totals.sPlusM), align: 'right' };
+      totalsCells[4] = { v: totals.netWt.toFixed(3) + ' g', align: 'right' };
+      totalsCells[8] = { v: inr(totals.sPlusM), align: 'right' };
     } else {
       // Landscape: full breakdown row. " g" suffix omitted so 5-digit
       // total weights ("20,000.000") fit inside the same column width
       // that holds a body value ("500.000") — column header already
       // labels the unit.
-      totalsCells[5]  = { v: totals.grossWt.toFixed(3), align: 'right' };
-      totalsCells[6]  = { v: totals.lessWt > 0 ? totals.lessWt.toFixed(3) : '—', align: 'right' };
-      totalsCells[7]  = { v: totals.netWt.toFixed(3), align: 'right' };
-      totalsCells[8]  = { v: inrPlain(totals.silver), align: 'right' };
-      totalsCells[9]  = { v: inrPlain(totals.making), align: 'right' };
-      totalsCells[10] = { v: totals.extra > 0 ? inrPlain(totals.extra) : '—', align: 'right' };
-      totalsCells[11] = { v: inrPlain(totals.sPlusM), align: 'right' };
+      totalsCells[5]  = { v: totals.grossWt.toFixed(3) + ' g', align: 'right' };
+      totalsCells[6]  = { v: totals.lessWt > 0 ? totals.lessWt.toFixed(3) + ' g' : '—', align: 'right' };
+      totalsCells[7]  = { v: totals.netWt.toFixed(3) + ' g', align: 'right' };
+      totalsCells[8]  = { v: inr(totals.silver), align: 'right' };
+      totalsCells[9]  = { v: inr(totals.making), align: 'right' };
+      totalsCells[10] = { v: totals.extra > 0 ? inr(totals.extra) : '—', align: 'right' };
+      totalsCells[11] = { v: inr(totals.sPlusM), align: 'right' };
       if (showTaxCols) {
         // After removing the % sub-columns the tax cells sit at index 12
         // (interstate: IGST Amt) or 12 & 13 (intra-state: CGST + SGST Amt).
         if (isInter) {
-          totalsCells[12] = { v: inrPlain(totals.taxAmt), align: 'right' };
+          totalsCells[12] = { v: inr(totals.taxAmt), align: 'right' };
         } else {
-          totalsCells[12] = { v: inrPlain(totals.halfTax), align: 'right' };
-          totalsCells[13] = { v: inrPlain(totals.halfTax), align: 'right' };
+          totalsCells[12] = { v: inr(totals.halfTax), align: 'right' };
+          totalsCells[13] = { v: inr(totals.halfTax), align: 'right' };
         }
       }
     }
     // Amount is always the last column regardless of tax layout.
-    totalsCells[cols.length - 1] = { v: inrPlain(totals.amount), align: 'right' };
+    totalsCells[cols.length - 1] = { v: inr(totals.amount), align: 'right' };
     let tx = M;
     for (let i = 0; i < cols.length; i++) {
       const c = cols[i];
