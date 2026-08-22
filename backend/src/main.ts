@@ -76,7 +76,10 @@ async function seedUploadsIfEmpty(logger: Logger) {
   if (!seed) return;
 
   await fs.mkdir(runtime, { recursive: true });
-  const existing = await fs.readdir(runtime);
+  // Ignore filesystem cruft (Railway/ext4 volumes ship a `lost+found` dir) so
+  // a brand-new volume still counts as empty and gets seeded. Only real
+  // content (subdirs like items/cad/materials, or files) blocks re-seeding.
+  const existing = (await fs.readdir(runtime)).filter((n) => n !== 'lost+found');
   if (existing.length > 0) return;
 
   let count = 0;
