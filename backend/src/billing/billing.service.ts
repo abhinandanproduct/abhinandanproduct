@@ -81,7 +81,7 @@ export class BillingService {
       this.prisma.invoice.findMany({
         where: { customerId, status: { not: 'CANCELLED' } },
         orderBy: { invoiceDate: 'asc' },
-        include: { items: { select: { itemNumber: true, description: true, lineAmount: true } } },
+        include: { items: { select: { itemNumber: true, description: true, silverAmount: true, lineAmount: true } } },
       }),
       this.prisma.payment.findMany({
         where: { customerId },
@@ -291,15 +291,18 @@ export class BillingService {
     const preRound = r2(subtotal + cgst + sgst + igst);
     const total = Math.round(preRound);
     const roundOff = r2(total - preRound);
-    // Metal-settled portion (₹) = the "Mixed Silver Jewellery" line(s). Per
-    // operator spec these are paid in METAL, not money — so the MONEY owed on
-    // the invoice = total − mixedSilverAmount (all Other Charges + all GST
-    // land on the money side). Zero for ordinary invoices (no mixed line),
-    // so money owed = total, i.e. behaviour is unchanged for them.
+    // Metal-settled portion (₹) = the SILVER value of the "Mixed Silver
+    // Jewellery" line(s) only — i.e. grams × silverRate. Per operator spec the
+    // silver is paid in METAL (the customer supplies the silver), but the
+    // MAKING on those lines is still owed in money. So we net out silverAmount,
+    // NOT the whole lineAmount — otherwise the making baked into the silver line
+    // gets swallowed and the money owed collapses to just Other Charges + GST.
+    // MONEY owed = total − mixedSilverAmount = all making + Other Charges + GST.
+    // Zero for ordinary invoices (no mixed line), so money owed = total.
     const mixedSilverAmount = r2(
       lines
         .filter((l: any) => /mixed\s*silver/i.test(`${l.itemNumber ?? ''} ${l.description ?? ''}`))
-        .reduce((s: number, l: any) => s + Number(l.lineAmount ?? 0), 0),
+        .reduce((s: number, l: any) => s + Number(l.silverAmount ?? 0), 0),
     );
     const moneyOwed = r2(Math.max(0, total - mixedSilverAmount));
     return {
@@ -1029,22 +1032,24 @@ export class BillingService {
   }
 
   /**
-   * ₹ value of the "Mixed Silver Jewellery" line(s) on an invoice — the part
-   * settled in METAL, so it's excluded from the money receivable. Money owed =
-   * totalAmount − this. Zero for ordinary invoices (no mixed-silver line).
+   * ₹ value settled in METAL on an invoice = the SILVER portion (grams ×
+   * silverRate, i.e. silverAmount) of the "Mixed Silver Jewellery" line(s).
+   * Excluded from the money receivable. The MAKING on those lines stays on the
+   * money side, so we sum silverAmount — NOT lineAmount (which would eat the
+   * making). Money owed = totalAmount − this. Zero for ordinary invoices.
    */
   private mixedSilverAmountOfItems(
-    items: Array<{ itemNumber?: any; description?: any; lineAmount?: any }>,
+    items: Array<{ itemNumber?: any; description?: any; silverAmount?: any; lineAmount?: any }>,
   ): number {
     return r2(
       (items ?? [])
         .filter((it) => /mixed\s*silver/i.test(`${it.itemNumber ?? ''} ${it.description ?? ''}`))
-        .reduce((s, it) => s + Number(it.lineAmount ?? 0), 0),
+        .reduce((s, it) => s + Number(it.silverAmount ?? 0), 0),
     );
   }
 
   /** Money owed on an invoice = total − mixed-silver (metal) portion. */
-  private moneyOwedOf(inv: { totalAmount: any; items: Array<{ itemNumber?: any; description?: any; lineAmount?: any }> }): number {
+  private moneyOwedOf(inv: { totalAmount: any; items: Array<{ itemNumber?: any; description?: any; silverAmount?: any; lineAmount?: any }> }): number {
     return r2(Math.max(0, Number(inv.totalAmount) - this.mixedSilverAmountOfItems(inv.items)));
   }
 
@@ -1072,7 +1077,7 @@ export class BillingService {
         // Pull extraAmount when the list is estimates so the coverage-
         // picker gets each row's "Other Charges" (additional only) total
         // for free.
-        items: { select: { quantity: true, weightG: true, totalWeightG: true, lessWeightG: true, extraAmount: true, itemNumber: true, description: true, lineAmount: true } },
+        items: { select: { quantity: true, weightG: true, totalWeightG: true, lessWeightG: true, extraAmount: true, itemNumber: true, description: true, silverAmount: true, lineAmount: true } },
       },
       // Sort by invoice number ascending — every list is already filtered
       // to one type, so the alphabetic sort keeps the sequence in numeric
@@ -1112,7 +1117,7 @@ export class BillingService {
           invoice: {
             select: {
               totalAmount: true, paidAmount: true, status: true,
-              items: { select: { itemNumber: true, description: true, lineAmount: true } },
+              items: { select: { itemNumber: true, description: true, silverAmount: true, lineAmount: true } },
             },
           },
         },
