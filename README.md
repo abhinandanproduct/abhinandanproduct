@@ -59,7 +59,7 @@ npm install --legacy-peer-deps
 npm run dev                   # app on http://localhost:3000
 ```
 
-Open **http://localhost:3000** → login **`admin` / `admin123`**.
+Open **http://localhost:3000** and sign in with the admin account the seed creates. **Change that password immediately**, and never reuse it in production.
 
 ---
 

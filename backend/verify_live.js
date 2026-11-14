@@ -1,7 +1,7 @@
 const BASE='http://localhost:4000/api'; let T='';
 async function api(m,p,b){const r=await fetch(BASE+p,{method:m,headers:{'Content-Type':'application/json',...(T?{Authorization:'Bearer '+T}:{})},body:b?JSON.stringify(b):undefined});const j=await r.json().catch(()=>({}));if(!r.ok||j.success===false)throw new Error(`${m} ${p} -> ${r.status} ${JSON.stringify(j).slice(0,150)}`);return j.data;}
 (async()=>{
-  T=(await api('POST','/auth/login',{login:'admin',password:'admin123'})).token;
+  T=(await api('POST','/auth/login',{login:process.env.ERP_USER||'admin',password:process.env.ERP_PASS})).token;
   // batches list
   const list=await api('GET','/casting/batches');
   const rows=Array.isArray(list)?list:list.rows||list;

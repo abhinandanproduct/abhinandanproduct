@@ -5,12 +5,13 @@ import { join, resolve } from 'path';
 import { promises as fs } from 'fs';
 import { PrismaClient, UserRole } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
+import { randomBytes } from 'crypto';
 import { AppModule } from './app.module';
 import { HttpExceptionFilter } from './common/http-exception.filter';
 import { TransformInterceptor } from './common/transform.interceptor';
 
 /**
- * First-boot bootstrap — creates a default admin (admin / admin123) if the
+ * First-boot bootstrap — creates an admin (password from ADMIN_PASSWORD, or random) if the
  * users table is completely empty. Solves the chicken-and-egg problem on a
  * fresh DB where no one can create users because user-creation is protected
  * by @Roles('ADMIN'). Runs once on every start but is idempotent — if any
@@ -24,7 +25,9 @@ async function seedInitialAdmin(logger: Logger) {
   try {
     const userCount = await prisma.user.count();
     if (userCount > 0) return;
-    const passwordHash = await bcrypt.hash('admin123', 10);
+    // Never a fixed default: use ADMIN_PASSWORD if set, otherwise a random one shown once in the log.
+    const initialPassword = process.env.ADMIN_PASSWORD || randomBytes(12).toString('base64url');
+    const passwordHash = await bcrypt.hash(initialPassword, 10);
     await prisma.user.create({
       data: {
         username: 'admin',
@@ -34,7 +37,9 @@ async function seedInitialAdmin(logger: Logger) {
         role: UserRole.ADMIN,
       },
     });
-    logger.warn('First-boot admin created: username=admin, password=admin123 — CHANGE THIS IMMEDIATELY via Admin → Users.');
+    logger.warn(process.env.ADMIN_PASSWORD
+      ? 'First-boot admin created: username=admin, password from ADMIN_PASSWORD. Change it via Admin → Users.'
+      : `First-boot admin created: username=admin, one-time password=${initialPassword}. Change it via Admin → Users.`);
   } catch (e) {
     logger.error('Initial admin seed failed', e as any);
   } finally {
