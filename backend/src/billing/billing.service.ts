@@ -79,7 +79,10 @@ export class BillingService {
 
     const [invoices, payments] = await Promise.all([
       this.prisma.invoice.findMany({
-        where: { customerId, status: { not: 'CANCELLED' } },
+        // TEMP_INVOICE is a consolidated share-view of an estimate, not a real
+        // receivable (it never posts to AR either — see affectsAR), so it must
+        // not appear as a debit in the customer ledger or it double-counts.
+        where: { customerId, status: { not: 'CANCELLED' }, type: { not: 'TEMP_INVOICE' } },
         orderBy: { invoiceDate: 'asc' },
         include: { items: { select: { itemNumber: true, description: true, silverAmount: true, lineAmount: true } } },
       }),
