@@ -2,6 +2,22 @@ import axios, { AxiosError } from 'axios';
 
 export const TOKEN_KEY = 'erp_token';
 
+/**
+ * Append the login token to a file-download URL as `?t=…`.
+ *
+ * PDFs/zips are opened via `window.open()` or an `<a href>` — a browser tab
+ * navigation, which (unlike axios) can't attach the Authorization header. The
+ * backend accepts the token from this query param for exactly these downloads,
+ * so the routes are no longer public. Without a token it returns the bare URL
+ * (server will 401), never a broken link.
+ */
+export function signDownloadUrl(url: string): string {
+  if (typeof window === 'undefined') return url;
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token) return url;
+  return url + (url.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(token);
+}
+
 export const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api',
 });
@@ -172,7 +188,7 @@ export const Api = {
     datasheetPdfUrl: (id: number, itemNumber?: string | null) => {
       const base = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api';
       const slug = (itemNumber ?? String(id)).replace(/[^A-Za-z0-9._-]+/g, '_');
-      return `${base}/items/${id}/datasheet/${slug}_details.pdf`;
+      return signDownloadUrl(`${base}/items/${id}/datasheet/${slug}_details.pdf`);
     },
   },
 
@@ -355,7 +371,7 @@ export const Api = {
       body: { qty: number; reason?: string; paymentMode: 'NO_PAY' | 'ADJUSTED' | 'FULL_PAY'; adjustment?: number },
     ) => unwrap<{ id: number; status: string; qty: number }>(api.post(`/casting/repairs/${id}/final-reject`, body)),
     repairPdfUrl: (id: number) =>
-      `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/casting/repairs/${id}/pdf`,
+      signDownloadUrl(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/casting/repairs/${id}/pdf`),
     stageLineage: (stageId: number) => unwrap<{ chain: any[] }>(api.get(`/casting/stages/${stageId}/lineage`)),
     settle: (body: { stageIds: number[]; nextProcessId: number; color?: string; vendorId?: number; maxQty?: number; targetBatchId?: number }) =>
       unwrap<{ forwarded: number }>(api.post('/casting/settle', body)),
@@ -414,7 +430,7 @@ export const Api = {
       qs.set('processId', String(processId));
       qs.set('kind', kind);
       if (tax) qs.set('tax', tax);
-      return `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/casting/batches/${batchId}/process-slips.zip?${qs.toString()}`;
+      return signDownloadUrl(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/casting/batches/${batchId}/process-slips.zip?${qs.toString()}`);
     },
     previewStickingIssue: (body: { itemId: number; splits: { color?: string | null; quantity: number }[]; bufferPercent?: number }) =>
       unwrap<{ lines: {
@@ -486,12 +502,12 @@ export const Api = {
       // Omit to aggregate every day (legacy behaviour).
       if (forwardDate) qs.set('forwardDate', forwardDate);
       const q = qs.toString();
-      return `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/casting/batches/${batchId}/pdf/${vendorId}${q ? `?${q}` : ''}`;
+      return signDownloadUrl(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/casting/batches/${batchId}/pdf/${vendorId}${q ? `?${q}` : ''}`);
     },
     stagePdfUrl: (stageId: number, tax?: 'GST' | 'URD' | null) =>
-      `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/casting/stages/${stageId}/pdf${tax ? `?tax=${tax}` : ''}`,
+      signDownloadUrl(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/casting/stages/${stageId}/pdf${tax ? `?tax=${tax}` : ''}`),
     receiptPdfUrl: (receiptId: number, tax?: 'GST' | 'URD' | null) =>
-      `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/casting/receipts/${receiptId}/pdf${tax ? `?tax=${tax}` : ''}`,
+      signDownloadUrl(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/casting/receipts/${receiptId}/pdf${tax ? `?tax=${tax}` : ''}`),
     // Downloadable PDF report for the Vendor Ledger page — sectioned (Work
     // Done / Under Process / Rejected / Short-Closed / Repair) with subtotals
     // and grand-total payable.
@@ -500,7 +516,7 @@ export const Api = {
       if (from) qs.set('from', from);
       if (to) qs.set('to', to);
       const q = qs.toString();
-      return `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/casting/vendor-ledger/${vendorId}/report.pdf${q ? `?${q}` : ''}`;
+      return signDownloadUrl(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/casting/vendor-ledger/${vendorId}/report.pdf${q ? `?${q}` : ''}`);
     },
   },
 
@@ -536,9 +552,9 @@ export const Api = {
       unwrap<any>(api.post(`/material-issues/${id}/close`, body ?? {})),
     remove: (id: number) => unwrap<any>(api.delete(`/material-issues/${id}`)),
     issuePdfUrl: (id: number) =>
-      `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/material-issues/${id}/pdf`,
+      signDownloadUrl(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/material-issues/${id}/pdf`),
     returnPdfUrl: (id: number) =>
-      `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/material-issues/${id}/return-pdf`,
+      signDownloadUrl(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/material-issues/${id}/return-pdf`),
   },
 
   upload: async (file: File, module: string, type: 'image' | 'cad' = 'image') => {
@@ -588,7 +604,7 @@ export const Api = {
     generateTempInvoice: (estimateId: number) =>
       unwrap<any>(api.post(`/invoices/${estimateId}/temp-invoice`, {})),
     invoicePdfUrl: (id: number) =>
-      `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/invoices/${id}/pdf`,
+      signDownloadUrl(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000/api'}/invoices/${id}/pdf`),
 
     payments: (params?: Record<string, any>) =>
       unwrap<any[]>(api.get('/payments', { params })),

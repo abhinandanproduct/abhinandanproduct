@@ -105,7 +105,6 @@ export class ItemsController {
   // Content-Disposition header told it otherwise. Route is BEFORE
   // @Get(':id') so the multi-segment path doesn't get matched as a
   // numeric id.
-  @Public()
   @Get(':id/datasheet/:filename')
   async datasheetPdf(
     @Param('id', ParseIntPipe) id: number,

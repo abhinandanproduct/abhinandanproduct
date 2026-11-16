@@ -48,7 +48,6 @@ export class MaterialIssuesController {
   }
 
   // Issue voucher PDF (the original issue document).
-  @Public()
   @Get(':id/pdf')
   async issuePdf(@Param('id', ParseIntPipe) id: number, @Res() res: Response) {
     const data = await this.svc.pdfData(id, 'ISSUE');
@@ -56,7 +55,6 @@ export class MaterialIssuesController {
   }
 
   // Return / status PDF (live snapshot of issued / used / returned / pending / short).
-  @Public()
   @Get(':id/return-pdf')
   async returnPdf(@Param('id', ParseIntPipe) id: number, @Res() res: Response) {
     const data = await this.svc.pdfData(id, 'STATUS');

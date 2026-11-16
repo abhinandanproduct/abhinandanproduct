@@ -137,7 +137,6 @@ export class CastingController {
 
   // Per-vendor PDF. Public so it can open in a new tab / be shared; the token
   // is still passed as a query param by the client for traceability.
-  @Public()
   @Get('batches/:id/pdf/:vendorId')
   async vendorPdf(
     @Param('id', ParseIntPipe) id: number,
@@ -169,7 +168,6 @@ export class CastingController {
   // `kind` = issue → vendor PDFs only; receipt → receipt PDFs only; all →
   // both, concatenated. Public so the browser can open via window.open()
   // without an Authorization header (matches the per-slip PDF routes).
-  @Public()
   @Get('batches/:id/process-slips.zip')
   async processSlipsZip(
     @Param('id', ParseIntPipe) id: number,
@@ -237,7 +235,6 @@ export class CastingController {
   }
 
   // Per-MOVEMENT issue slip — one slip for a single stage (each forward/issue).
-  @Public()
   @Get('stages/:id/pdf')
   async stagePdf(
     @Param('id', ParseIntPipe) id: number,
@@ -249,7 +246,6 @@ export class CastingController {
   }
 
   // Per-receipt PDF (receive slip).
-  @Public()
   @Get('receipts/:id/pdf')
   async receiptPdf(
     @Param('id', ParseIntPipe) id: number,
@@ -330,7 +326,6 @@ export class CastingController {
 
   // Per-repair-order PDF — the "🔧 REPAIR ORDER — NO CHARGE" slip the
   // floor hands to the vendor along with the pcs for rework.
-  @Public()
   @Get('repairs/:id/pdf')
   async repairPdf(
     @Param('id', ParseIntPipe) id: number,
@@ -507,7 +502,6 @@ export class CastingController {
   // rejected / shortClosed / repair, with subtotals + grand-total payable.
   // Public so the browser can open it directly via window.open() without
   // an Authorization header (the token still travels via cookie/query).
-  @Public()
   @Get('vendor-ledger/:vendorId/report.pdf')
   async vendorLedgerReportPdf(
     @Param('vendorId', ParseIntPipe) vendorId: number,

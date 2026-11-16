@@ -110,7 +110,6 @@ export class BillingController {
 
   // PDF — anonymous so the print-window can pull without bouncing through auth.
   // The id namespace is the same as the secured endpoint.
-  @Public()
   @Get('invoices/:id/pdf')
   async invoicePdf(@Param('id', ParseIntPipe) id: number, @Res() res: Response) {
     const inv = await this.svc.getInvoice(id);
